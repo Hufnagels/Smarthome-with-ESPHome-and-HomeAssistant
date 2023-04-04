@@ -1,0 +1,118 @@
+# Wemos D1 mini board
+# Reed Sensor
+#   REED SW 0.5/10 MF15
+#   REED SW.Us:200V Is:0.5A Ps:10W 10mm hossz üvegcső KSK1A87-1520
+#   https://www.hqelektronika.hu/reed-swus200v-is05a-ps10w-10mm-uvegcso-hossz-reed-sw-05-10-mf15
+#   10kOhm
+
+substitutions:
+  device_type: Sensor
+  device_subtype: Gas meter
+  device_number: "1"
+  device_name: sensor-gas-meter-1
+  device_group: Metering
+
+  device_location: Hall
+  device_floor: Ground floor
+  
+  unit_name: ""
+  parent_device: ""
+  child_devices: "{}"
+  controlled_device: ""
+
+  <<: !include .base.substitutions.yaml
+
+  # MQTT topic prefix for testing
+  <<: !include .base.mqtt-topic-prefix.yaml
+  
+  # MQTT default topics
+  <<: !include .mqtt.default-topics.yaml
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${device_type} ${device_subtype} ${device_number}
+  comment: ${device_type} ${device_subtype} ${device_number} on Wemos D1 mini with Reed switch in ${device_location} on ${device_floor}
+
+  <<: !include .board.wemos-d1-mini.yaml
+
+<<: !include .base.connection-settings.yaml
+
+# HA date-time
+<<: !include .base.ha-get-time.yaml
+
+# MQTT
+mqtt:
+  <<: !include .base.mqtt-connection-params.yaml
+  
+  on_connect:
+    - wait_until: time.has_time #mqtt.connected
+    - mqtt.publish_json:
+        topic: ${topic_state}
+        payload: |-
+          root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+          root["room"] = "${device_location}";
+          root["floor"] = "${device_floor}";
+          root["payload"]["state"] = "ON";
+          root["trigger"] = "on_connect";
+          root["timestamp"] = id(homeassistant_time).now().timestamp;
+    - logger.log: "${device_type} ${device_subtype} ${device_number} connected"
+  on_disconnect:
+    - mqtt.publish_json:
+        topic: ${topic_state}
+        payload: |-
+          root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+          root["room"] = "${device_location}";
+          root["floor"] = "${device_floor}";
+          root["payload"]["state"] = "OFF";
+          root["trigger"] = "on_disconnect";
+          root["timestamp"] = id(homeassistant_time).now().timestamp;
+    - logger.log: "${device_type} ${device_subtype} ${device_number} disconnected"
+
+switch:
+  - platform: gpio
+    pin: GPIO02 #internal LED
+    name: "Internal LED"
+    id: internal_led
+    restore_mode: RESTORE_DEFAULT_OFF
+
+binary_sensor:
+  - platform: status
+    name: "${device_name} - Status"
+
+sensor:
+  - platform: wifi_signal
+    name: "${device_name} - WiFi Signal"
+    update_interval: 3s
+
+  - platform: pulse_counter
+    pin: D1
+    name: "Gas Cubic meters used"
+    update_interval : 1s
+    filters:
+      - multiply: 0.01
+    unit_of_measurement: "m³/ min"
+    id: gas
+    accuracy_decimals: 3
+    icon: 'mdi:fire'
+    on_raw_value:
+      then:
+        - mqtt.publish_json:
+            topic: ${topic_state}
+            payload: |-
+              root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+              root["room"] = "${device_location}";
+              root["floor"] = "${device_floor}";
+              root["payload"]["state"] = "OFF";
+              root["trigger"] = "on_disconnect";
+              root["timestamp"] = id(homeassistant_time).now().timestamp;
+
+  - platform: template
+    name: "Gas Total m³"
+    lambda: |-
+      static float total_value = 0.0;
+      total_value += id(gas).state;
+      return total_value;
+    unit_of_measurement: "m³"
+    icon: 'mdi:fire'
+    update_interval: 60s
+    accuracy_decimals: 3

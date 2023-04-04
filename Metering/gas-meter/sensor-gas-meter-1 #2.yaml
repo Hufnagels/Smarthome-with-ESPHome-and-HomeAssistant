@@ -1,0 +1,204 @@
+# RTC I2C
+# Wemos D1 mini board
+# Reed Sensor
+#   REED SW 0.5/10 MF15
+#   REED SW.Us:200V Is:0.5A Ps:10W 10mm hossz üvegcső KSK1A87-1520
+#   https://www.hqelektronika.hu/reed-swus200v-is05a-ps10w-10mm-uvegcso-hossz-reed-sw-05-10-mf15
+#   10kOhm
+#   DS3231 AT24C32 IIC
+#     Results from i2c bus scan:
+#     Found i2c device at address 0x57
+#     Found i2c device at address 0x68
+
+substitutions:
+  device_type: Sensor
+  device_subtype: Gasmeter
+  device_number: "1"
+  device_name: sensor-gas-meter-1
+  device_group: Metering
+
+  device_location: Hall
+  device_floor: Ground floor
+  
+  unit_name: ""
+  parent_device: "_"
+  child_devices: "{}"
+  controlled_device: ""
+
+  <<: !include includes/.base.substitutions.yaml
+
+  # MQTT topic prefix for testing
+  <<: !include includes/.base.mqtt-topic-prefix.yaml
+  
+  # MQTT default topics
+  <<: !include includes/.mqtt.default-topics.yaml
+
+  # MQTT device specific topics
+
+  # update 1
+  # https://community.home-assistant.io/t/track-a-gas-meter-with-esphome/162669/26
+  # BK-4GM 1 imp = 0.01 m³ => 1 / 0.01 = 100 imp / m³
+  # Gas Meter Settings
+  gas_imp_value: '100' # impulses / m³ 
+  
+  gas_imp_debounce_on: '0.01 s'
+  gas_imp_debounce_off: '0.1 s'
+
+  # PIN settings
+    # D8 (you could use an digital pin)
+  gas_read_pin: D1 
+    # DS3231 AT24C32 IIC
+  sda_pin: D2
+  scl_pin: D1
+
+  # Device friendly name
+  friendly_name: ${device_type} ${device_subtype} ${device_number}
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: ${device_type} ${device_subtype} ${device_number} on Wemos D1 mini with Reed switch in ${device_location} on ${device_floor}
+  <<: !include includes/.board.wemos-d1-mini.yaml
+  on_boot:
+    then:
+      # read the RTC time once when the system boots
+      ds1307.read_time:
+
+# Connection setup
+<<: !include includes/.base.connection-settings.yaml
+
+# HA time
+#<<: !include includes/.base.ha-get-time.yaml
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    on_time_sync:
+      then:
+        # ... and update the RTC when the synchronization was successful
+
+        ds1307.write_time:
+  - platform: ds1307
+    # repeated synchronization is not necessary unless the external RTC
+    # is much more accurate than the internal clock
+    update_interval: never
+    on_time_sync:
+      then:
+        - logger.log: "Synchronized system clock"
+
+# DS3231 AT24C32 IIC
+# Clock chip: DS3231
+# Memory chip: AT24C32 (32K)
+
+i2c:
+  sda: $sda_pin
+  scl: $scl_pin
+  scan: true
+  id: bus_rtc
+
+# MQTT
+mqtt:
+  <<: !include includes/.base.mqtt-connection-params.yaml
+  
+  on_connect:
+    - wait_until: time.has_time #mqtt.connected
+    - mqtt.publish_json:
+        topic: ${topic_state}
+        payload: |-
+          root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+          root["room"] = "${device_location}";
+          root["floor"] = "${device_floor}";
+          root["payload"]["state"] = "ON";
+          root["trigger"] = "on_connect";
+          root["timestamp"] = id(homeassistant_time).now().timestamp;
+    - logger.log: "${friendly_name} connected"
+  on_disconnect:
+    - mqtt.publish_json:
+        topic: ${topic_state}
+        payload: |-
+          root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+          root["room"] = "${device_location}";
+          root["floor"] = "${device_floor}";
+          root["payload"]["state"] = "OFF";
+          root["trigger"] = "on_disconnect";
+          root["timestamp"] = id(homeassistant_time).now().timestamp;
+    - logger.log: "${friendly_name} disconnected"
+
+globals:
+  - id: gas_impulses
+    type: int
+    restore_value: true # if set to false, the value will be 0 at reboot
+    initial_value: '0'
+  # set the Gasmeter initial value like: 9911.013
+  - id: initial_gas_value
+    type: float
+    restore_value: true 
+    initial_value: '9011.000'
+
+# Reed switch
+binary_sensor:
+  - platform: gpio
+    id: gas_impulse
+    internal: true
+    pin:
+      number: $gas_read_pin
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_off: $gas_imp_debounce_off
+    on_press:
+      then:
+        - lambda: id(gas_impulses) += 1;
+
+sensor:
+  - platform: pulse_meter
+    name: "${friendly_name} Gasverbrauch"
+    id: sgm_gasverbrauch
+    unit_of_measurement: 'm³/min'
+    internal_filter: $gas_imp_debounce_on
+    timeout: 1 min
+    state_class: measurement
+    device_class: gas
+    icon: mdi:meter-gas
+    #accuracy_decimals: 3
+    pin:
+      number: $gas_read_pin
+      mode: INPUT_PULLUP
+      inverted: true
+    filters: # 1 imp / 0.1 m³ = 10 imp / m³ (in my case); gas_imp_value = 10;
+      - lambda: !lambda |-
+          ESP_LOGD("custom", "sgm_gasverbrauch: %d", id(sgm_gasverbrauch)); 
+          return x * (1.0 / ${gas_imp_value});
+    on_value:
+      then:
+        - switch.turn_on: internal_led
+  - platform: template
+    name: "${friendly_name} Gasverbrauch Total"
+    id: sgm_gasverbrauch_total
+    unit_of_measurement: 'm³'
+    icon: mdi:meter-gas-outline
+    state_class: total_increasing
+    device_class: gas
+    accuracy_decimals: 3
+    lambda: return id(initial_gas_value) + id(gas_impulses) * (1.0 / ${gas_imp_value});
+    update_interval: 10 s
+
+# Internal Led for feedback measure 
+switch:
+  - platform: gpio
+    pin: GPIO02 #internal LED
+    inverted: True
+    name: "Internal LED"
+    id: internal_led
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - delay: 10ms
+      - switch.turn_off: internal_led
+    #  - mqtt.publish:
+    #        topic: "Livingroom/Thermostat/relay/state"
+    #        payload: !lambda |-
+    #          return id(internal_led).state ? "ON" : "OFF";
+    #on_turn_off:
+    #  - mqtt.publish:
+    #        topic: "Livingroom/Thermostat/relay/state"
+    #        payload: !lambda |-
+    #          return id(internal_led).state ? "ON" : "OFF";

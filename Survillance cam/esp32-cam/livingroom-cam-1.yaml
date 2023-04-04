@@ -1,0 +1,150 @@
+# esp32-cam AI-Thinker board
+# enc: ZChn4u6GJ/rwS5+W/AlfZ82y4qsTcbfpvoy8dGP151k=
+#
+#
+
+substitutions:
+  device_type: Camera
+  device_subtype: Indoor
+  device_number: "1"
+  device_name: camera-indoor-1
+  device_group: Survillance
+
+  device_location: Livingroom
+  device_floor: Ground floor
+
+  unit_name: ""
+  parent_device: "_"
+  child_devices: "{}"
+  controlled_device: ""
+
+  <<: !include includes/.base.substitutions.yaml
+
+  # MQTT topic prefix for testing
+  <<: !include includes/.base.mqtt-topic-prefix.yaml
+
+  # MQTT default topics
+  <<: !include includes/.mqtt.default-topics.yaml
+
+  # MQTT device specific topics
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${device_type} ${device_subtype} ${device_number}
+  comment: ${device_type} ${device_subtype} ${device_number} on ESP32 Cam board in ${device_location} on ${device_floor}
+
+  <<: !include includes/.board.esp32-cam.yaml
+
+<<: !include includes/.base.connection-settings.yaml
+
+
+# HA date-time
+<<: !include includes/.base.ha-get-time.yaml
+
+# MQTT
+mqtt:
+  <<: !include includes/.base.mqtt-connection-params.yaml
+  on_connect:
+    - wait_until: time.has_time #mqtt.connected
+    - mqtt.publish_json:
+        topic: ${topic_state}
+        payload: |-
+          root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+          root["room"] = "${device_location}";
+          root["floor"] = "${device_floor}";
+          root["payload"]["state"] = "ON";
+          root["trigger"] = "on_connect";
+          root["timestamp"] = id(homeassistant_time).now().timestamp;
+    - logger.log: "${device_type} ${device_subtype} ${device_number} connected"
+  on_disconnect:
+    - mqtt.publish_json:
+        topic: ${topic_state}
+        payload: |-
+          root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+          root["room"] = "${device_location}";
+          root["floor"] = "${device_floor}";
+          root["payload"]["state"] = "OFF";
+          root["trigger"] = "on_disconnect";
+          root["timestamp"] = id(homeassistant_time).now().timestamp;
+    - logger.log: "${device_type} ${device_subtype} ${device_number} disconnected"
+
+esp32_camera:
+  external_clock:
+    pin: GPIO0
+    frequency: 20MHz
+  i2c_pins:
+    sda: GPIO26
+    scl: GPIO27
+  data_pins: [GPIO5, GPIO18, GPIO19, GPIO21, GPIO36, GPIO39, GPIO34, GPIO35]
+  vsync_pin: GPIO25
+  href_pin: GPIO23
+  pixel_clock_pin: GPIO22
+  power_down_pin: GPIO32
+
+  # Image settings
+  name: $device_name
+
+# Image/Video settings, https://esphome.io/components/esp32_camera.html
+
+  max_framerate: 25 fps    # default: 10 fps, max 60
+  idle_framerate: 0.2 fps # default: 0.1 fps - framerate for 'picture' in HA dashboard
+  resolution: 1024x768
+  jpeg_quality: 8
+  vertical_flip: False
+  horizontal_mirror: False
+  contrast: 0 # default: 0, variable -2 to 2
+  brightness: 0 # default: 0, variable -2 to 2
+  saturation: 0 # default: 0, variable -2 to 2
+  
+esp32_camera_web_server:
+  - port: 8080
+    mode: stream
+  - port: 8081
+    mode: snapshot
+
+output:
+#flashlight
+  - platform: gpio
+    pin: GPIO4
+    id: gpio_4
+
+light:
+#flashlight
+  - platform: binary
+    output: gpio_4
+    name: $device_name light
+    # Optional variables:
+    retain: true
+    availability:
+      topic: ${topic_basetopic}/flashlight/status
+      payload_available: online
+      payload_not_available: offline
+    state_topic: ${topic_basetopic}/flashlight/state
+    #command_topic: ${topic_basetopic}/flashlight/command
+    #command_retain: false
+
+sensor:
+  - platform: uptime
+    name: $device_name Uptime
+    # Optional variables:
+    retain: true
+    availability:
+      topic: ${topic_basetopic}/uptime/status
+      payload_available: online
+      payload_not_available: offline
+    state_topic: ${topic_basetopic}/uptime/state
+    #command_topic: ${topic_basetopic}/uptime/command
+    #command_retain: false
+
+switch:      
+  - platform: restart
+    name: $device_name restart
+    # Optional variables:
+    retain: true
+    availability:
+      topic: ${topic_basetopic}/restart/status
+      payload_available: online
+      payload_not_available: offline
+    state_topic: ${topic_basetopic}/restart/state
+    #command_topic: ${topic_basetopic}/restart/command
+    #command_retain: false
