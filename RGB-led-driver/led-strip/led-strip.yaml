@@ -1,0 +1,148 @@
+# wemos D1 mini board
+# ESP8266 chip
+# 3 x IRFZ44N Mosfet
+# R: D2
+# G: D3
+# B: D4
+
+######################################
+# SUBSTITUIONS SECTION
+######################################
+substitutions:
+  device_type: LED-strip
+  device_subtype: RGB
+  device_number: "1"
+  device_name: led-strip-rgb-1
+  device_group: Lighting
+  
+  device_location: Kidroom
+  device_floor: Ground floor
+
+  unit_name: ""
+  parent_device: ""
+  child_devices: "{Relay_1}"
+  controlled_device: ""
+
+  <<: !include includes/base/.base.substitutions.yaml
+
+  # MQTT topic prefix for testing
+  <<: !include includes/mqtt/.mqtt.topic-prefix.yaml
+  # MQTT default topics
+  <<: !include includes/mqtt/.mqtt.default-topics.yaml
+
+  # MQTT device specific topics
+
+######################################
+# ESPHOME SECTION
+######################################
+esphome:
+  # Project/Board definition
+  <<: !include includes/base/.base.esphome-definition.yaml
+  # Board type
+  <<: !include includes/boards/.board.wemos-d1-mini.yaml
+  project:
+    <<: !include projects/rgb-ledstrip.yaml
+  on_shutdown:
+    priority: 700
+    then:
+      - light.turn_off: light_1
+
+######################################
+# PACKAGES SECTION
+######################################
+packages:
+  mqtt: !include includes/mqtt/.mqtt.base-params.yaml
+
+######################################
+# Connection SECTION: wifi, api, ota
+######################################
+<<: !include includes/base/.base.connection-settings.yaml
+
+######################################
+# HA DATE-TYME SYNC SECTION
+######################################
+<<: !include includes/ha/.ha.time-sync.yaml
+
+######################################
+# MQTT SECTION
+######################################
+
+######################################
+# LIGHT SECTION
+######################################
+light:
+  - platform: rgb
+    id: light_1
+    name: "${device_location} ${device_type} ${device_subtype} Lights"
+    <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "light", component_id: "light_1" } } # inline syntax
+    red: output_component_R
+    green: output_component_G
+    blue: output_component_B
+    on_turn_on:
+      - logger.log: "Light Turned On!"
+      - mqtt.publish_json:
+            topic: ${topic_basetopic}/state
+            payload: |-
+              root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+              root["receiver"] = "${device_type}_${device_subtype}_${device_number}";
+              root["room"] = "${device_location}";
+              root["floor"] = "${device_floor}";
+              root["payload"]["state"] = "ON";
+              root["payload"]["brightness"] = id(light_1)->remote_values.get_brightness() * 255;
+              root["payload"]["red"] = id(light_1)->remote_values.get_red() * 255;
+              root["payload"]["green"] = id(light_1)->remote_values.get_green() * 255;
+              root["payload"]["blue"] = id(light_1)->remote_values.get_blue() * 255;
+              root["trigger"] = "light on_turn_on";
+              root["timestamp"] = id(homeassistant_time).now().timestamp;
+    on_turn_off:
+    - logger.log: "Light Turned Off!"
+    - mqtt.publish_json:
+            topic: ${topic_basetopic}/state
+            payload: |-
+              root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+              root["receiver"] = "${device_type}_${device_subtype}_${device_number}";
+              root["room"] = "${device_location}";
+              root["floor"] = "${device_floor}";
+              root["payload"]["state"] = "OFF";
+              root["trigger"] = "light on_sturn_off";
+              root["timestamp"] = id(homeassistant_time).now().timestamp;
+    on_state:
+    - logger.log: "Light State Changed!"
+    - mqtt.publish_json:
+            topic: ${topic_basetopic}/state
+            payload: |-
+              root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+              root["receiver"] = "${device_type}_${device_subtype}_${device_number}";
+              root["room"] = "${device_location}";
+              root["floor"] = "${device_floor}";
+              root["payload"]["state"] = "ON";
+              root["payload"]["brightness"] = id(light_1)->remote_values.get_brightness() * 255;
+              root["payload"]["red"] = id(light_1)->remote_values.get_red() * 255;
+              root["payload"]["green"] = id(light_1)->remote_values.get_green() * 255;
+              root["payload"]["blue"] = id(light_1)->remote_values.get_blue() * 255;
+              root["trigger"] = "light on_state";
+              root["timestamp"] = id(homeassistant_time).now().timestamp;
+    
+######################################
+# OUTPUT SECTION
+######################################
+output:
+  - platform: esp8266_pwm
+    id: output_component_R
+    pin: D4
+    max_power: 100%
+  - platform: esp8266_pwm
+    id: output_component_G
+    pin: D2
+    max_power: 100%
+  - platform: esp8266_pwm
+    id: output_component_B
+    pin: D3
+    max_power: 100%
+
+######################################
+# BUTTON SECTION
+######################################
+button:
+  <<: !include includes/components/.components.button.restart.yaml
+  <<: !include includes/components/.components.button.restart-factory.yaml

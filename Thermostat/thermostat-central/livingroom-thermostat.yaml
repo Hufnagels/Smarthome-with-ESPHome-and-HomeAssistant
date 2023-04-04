@@ -1,0 +1,842 @@
+# nodemcu-32s v1.1 board
+# bme680 sensor bsec library
+# Nextion NX3224T028 Basic
+#   320 x 240 Resolution
+#   RGB 65K true to life colours
+#   TFT screen with integrated resistive touch panel 
+#   4 pin TTL serial interface
+#   4M Flash memory for User Application Code and Data 
+#   On board micro-SD card slot for firmware upgradation
+
+######################################
+# SUBSTITUIONS SECTION
+######################################
+substitutions:
+  device_type: Thermostat
+  device_subtype: Central
+  device_number: "1"
+  device_name: thermostat-central-1
+  device_group: Climate
+
+  device_location: Livingroom
+  device_floor: Ground floor
+  
+  unit_name: ""
+  parent_device: ""
+  child_devices: "{relay-1}"
+  controlled_device: "thermostat-relay-1"
+
+  <<: !include includes/base/.base.substitutions.yaml
+
+  # MQTT topic prefix for testing
+  <<: !include includes/mqtt/.mqtt.topic-prefix.yaml
+  # MQTT default topics
+  <<: !include includes/mqtt/.mqtt.default-topics.yaml
+
+  # MQTT device specific topics
+
+  # NEXTION specific variables
+  display_id: nextion_NX3224T028
+  temp_bme60: x_room_temp             # BME680 measured temp
+  temp_weather: x_out_temp            # weather forecast entity 
+  temp_settemp: x_boiler_temp         # Set temp
+
+  # Timeing 
+  # BME680 refresh
+  # ulp approx 5 min 
+  # Deep sleep
+  ds_sleep_duration: 5min     # ~5 min
+  ds_run_duration: 20s
+
+######################################
+# ESPHOME SECTION
+######################################
+esphome:
+  # Project/Board definition
+  <<: !include includes/base/.base.esphome-definition.yaml
+  # Board type
+  <<: !include includes/boards/.board.nodemcu-32s.yaml
+  project:
+    <<: !include projects/livingroom-thermostat.yaml
+  on_shutdown:
+    priority: 700
+    then:
+      - switch.turn_off: heater_template_switch
+      # deepsleep
+
+######################################
+# PACKAGES SECTION
+######################################
+packages:
+  mqtt: !include includes/mqtt/.mqtt.base-params.yaml
+  text_sensor: !include includes/components/.components.text_sensor.wifi-connection-data.yaml
+
+######################################
+# Connection SECTION: wifi, api, ota
+######################################
+<<: !include includes/base/.base.connection-settings.yaml
+
+######################################
+# HA DATE-TYME SYNC SECTION
+######################################
+<<: !include includes/ha/.ha.time-sync.yaml
+
+######################################
+# DEEP-SLEEP SECTION
+######################################
+#deep_sleep:
+#  id: deep_sleep_1
+#  run_duration: 20s
+#  sleep_duration: 5min
+
+######################################
+# MQTT SECTION
+######################################
+mqtt:
+  on_connect:
+    - logger.log: "${device_type} ${device_subtype} ${device_number} connected to MQTT"
+    - lambda: |-
+        // Connected to WiFi
+        //id(${display_id}).set_component_value("page0.wifi_state", 1);
+        id(heater_template_switch).turn_off();
+        //id(${display_id}).send_command_printf("page0.on_off.pic=%d", id(on_off_on_pic));
+        //id(${display_id}).send_command_printf("page0.on_off.pic2=%d", id(on_off_on_pic));
+        //id(unit_state) = true;
+  on_disconnect:
+    - logger.log: "${device_type} ${device_subtype} ${device_number} disconnected"
+
+  # smarthome_test/Climate/Livingroom/Thermostat/command
+  on_json_message:
+    # Central Unit send command for turning ON | OFF Heater
+    - topic: ${topic_command}
+      then:
+        - lambda: |-
+            if (x.containsKey("receiver") && x["receiver"] == "${device_name}") {
+              if (x["payload"]["command"] == "ON" ) {
+                // Turn Heater ON, MANUAL MODE SELECTED
+                id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_on_pic));
+                id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_on_pic));
+                id(internal_led).turn_on();
+                id(heater_state) = true;
+                id(auto_mode_state) = false;
+                id(${display_id}).send_command_printf("tsw hvac,0");
+                id(${display_id}).send_command_printf("tsw heater,0");
+              }
+              if (x["payload"]["command"] == "OFF" ) {
+                // Turn Heater OFF 
+                id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_off_pic));
+                id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_off_pic));
+                id(internal_led).turn_off();
+                id(heater_state) = false;
+                id(auto_mode_state) = true;
+                id(${display_id}).send_command_printf("tsw hvac,1");
+                id(${display_id}).send_command_printf("tsw heater,1");
+              }
+            }
+
+######################################
+# GLOBALS SECTION
+######################################
+globals:
+  - id: nextion_boot_check           
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: system_ready_check           
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: auto_mode_state           
+    type: bool
+    restore_value: false
+    initial_value: 'true'
+  # Temp variables
+  - id: settemp_value
+    type: float
+    restore_value: no
+    initial_value: '20.00'            # come from Nextion
+  - id: settemp_reference_value
+    type: float[4]
+    restore_value: no
+    initial_value: '{20.00, 23.00}'   # Winter, Summer --> Cooling needed
+  - id: outtemp_value
+    type: float
+    restore_value: no
+    initial_value: '0'
+  # Heater state to avoid run heater and AC on same time
+  - id: heater_state
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # AC state to avoid run heater and AC on same time
+  - id: ac_state
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Unit state: ON/OFF
+  - id: unit_state
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Image numbers from Nextion (Must be checked)
+  # Heater
+  - id: heater_on_pic           
+    type: int
+    initial_value: '7'
+    restore_value: false
+  - id: heater_off_pic           
+    type: int
+    initial_value: '6'
+    restore_value: false
+  # AC
+  - id: ac_on_pic           
+    type: int
+    initial_value: '3'
+    restore_value: false
+  - id: ac_off_pic           
+    type: int
+    initial_value: '2'
+    restore_value: false
+  # ON|OFF
+  - id: on_off_off_pic           
+    type: int
+    initial_value: '4'
+    restore_value: false
+  - id: on_off_on_pic           
+    type: int
+    initial_value: '5'
+    restore_value: false
+  # Display brightness
+  - id: brightness           
+    type: int
+    initial_value: '0'
+    restore_value: true
+
+######################################
+# NEXTION BRIGHTNESS SECTION
+######################################
+sun:
+  #47.51133237366385, 19.09615371159244
+  latitude: 47.51133237366385
+  longitude: 19.09615371159244
+  on_sunrise:
+   - elevation: 2°
+     then:
+       lambda: |-
+        id(brightness)=1;
+  on_sunset:
+      then:
+       lambda: |-
+        id(brightness)=3;
+
+######################################
+# NEXTION UART SECTION
+######################################
+uart:
+  id: uart_2
+  rx_pin: GPIO16
+  tx_pin: GPIO17
+  baud_rate: 9600
+  #debug:
+
+######################################
+# NEXTION DISPLAY SECTION
+######################################
+display:
+  - platform: nextion
+    id: ${display_id}
+    uart_id: uart_2
+    update_interval: 300ms
+    lambda: |-
+      it.set_component_text_printf("page0.settemp", "%.1f", id(settemp_value));
+
+      // Check connection to WiFi, and sync with HA time
+      if (id(homeassistant_time).now().is_valid()) {
+        it.set_component_text_printf("page0.current_date", "%i.%02i.%02i", id(homeassistant_time).now().year, id(homeassistant_time).now().month, id(homeassistant_time).now().day_of_month);
+        it.set_component_text_printf("page0.current_time", "%02i:%02i", id(homeassistant_time).now().hour, id(homeassistant_time).now().minute);
+      }
+      
+      if(!isnan(id(room_temp).state)) {
+        // page0
+        it.set_component_text_printf("page0.room_temp", "%.2f °C", id(room_temp).state);
+        if( id(settemp_value) <= id(room_temp).state && !id(nextion_boot_check) && id(unit_state)) {
+          // Turn Heater OFF 
+          id(heater_template_switch).turn_off();
+        }  
+        if( id(settemp_value) > id(room_temp).state && !id(nextion_boot_check) && id(unit_state)) {
+          // Turn Heater ON 
+          id(heater_template_switch).turn_on();
+        }
+        
+        id(nextion_boot_check) = true;
+        
+        // page1
+        it.set_component_text_printf("page1.t_temp", "%.2f", id(room_temp).state);
+        if(!isnan(id(room_pressure).state)) { it.set_component_text_printf("page1.t_pres", "%.2f", id(room_pressure).state);}
+        if(!isnan(id(room_humidity).state)) { it.set_component_text_printf("page1.t_hum", "%.2f", id(room_humidity).state);}
+        if(!isnan(id(co2_equivalent).state)) { it.set_component_text_printf("page1.t_co2", "%.2f", id(co2_equivalent).state);}
+        if(!isnan(id(iaq).state)) { it.set_component_text_printf("page1.t_iaq", "%.2f", id(iaq).state);}
+        if(!isnan(id(room_temp).state)) { it.set_component_text_printf("page1.t_iaqc", "%s", " ");}
+      }
+      
+      if(!isnan(id(weather_temperature).state)) {it.set_component_text_printf("page0.out_temp", "%.1f °C", id(weather_temperature).state);}
+      if(!isnan(id(weather_humidity).state)) { it.set_component_text_printf("page0.hum", "%.1f %", id(weather_humidity).state);}
+      if(!isnan(id(weather_rain).state)) {it.set_component_text_printf("page0.rain", "%.1f %", id(weather_rain).state);}
+      if(!isnan(id(weather_windspeed).state)) { it.set_component_text_printf("page0.wind", "%.1f m/min", id(weather_windspeed).state);}
+
+      if  (id(brightness) <2){ it.set_backlight_brightness(.9); }
+      if  (id(brightness) >2){ it.set_backlight_brightness(.3); }
+
+######################################
+# INTERVAL SECTION
+######################################
+interval:
+  - interval: 1s
+    then:
+      if:
+        condition:
+          api.connected:
+        then:
+          - if:
+              condition:
+                and:
+                  - lambda: 'return !id(system_ready_check);'
+              then:
+                - lambda: |-
+                    // Connected to WiFi
+                    id(${display_id}).set_component_value("page0.wifi_state", 1);
+                    id(OnOff_template_switch).turn_on();
+                    id(system_ready_check) = true;
+                - logger.log: "INTERVAL CHECK succseed"
+        
+######################################
+# I2C SECTION
+######################################
+i2c:
+  sda: 21 # SCK - P21
+  scl: 22 # SDI - P22
+  scan: true
+  id: bus_a
+
+######################################
+# BME680 SECTION
+######################################
+bme680_bsec:
+  address: 0x77
+  temperature_offset: 1
+  iaq_mode: static
+  sample_rate: ulp
+  state_save_interval: 6h
+
+######################################
+# BINARY SENSOR SECTION
+######################################
+binary_sensor:
+  ######################################
+  # Nextion Display buttons
+  #   AC, ON|OFF, Heater
+  ######################################
+  # HEATER ON/OFF
+  - platform: nextion
+    page_id: 0
+    component_id: 9
+    id: heater
+    name: Heater state
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_heater_state" } } # inline syntax
+    on_release:
+      - if:
+          condition:
+            and:
+              #- lambda: 'return id(auto_mode_state);'
+              - lambda: 'return id(ac_state) == false;'
+              - lambda: 'return id(heater_state) == true;'
+          then:
+            - logger.log: "Heater is on, AC is off and heater should turned off"
+            - lambda: |-
+                // Turn OFF Heater
+                id(heater_template_switch).turn_off();
+      - if:
+          condition:
+            and:
+              #- lambda: 'return id(auto_mode_state);'
+              - lambda: 'return id(ac_state) == false;'
+              - lambda: 'return id(heater_state) == false;'
+          then:
+            - logger.log: "Heater is off, AC is off and heater should turned on"
+            - lambda: |-
+                // Turn ON Heater
+                id(heater_template_switch).turn_on();
+
+  # UNIT ON/OFF
+  - platform: nextion
+    page_id: 0
+    component_id: 21
+    id: unit_onoff
+    name: Unit On/Off state
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_on_off_unit" } } # inline syntax
+
+  # AC ON/OFF
+  - platform: nextion
+    page_id: 0
+    component_id: 10
+    id: hvac
+    name: AC state
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_ac_state" } } # inline syntax
+    #on_press:
+    #  - wait_until:
+    #      condition:
+    #        - lambda: 'return id(heater_state) == false;'
+    on_release:
+      if:
+        condition:
+          and:
+            #- lambda: 'return id(auto_mode_state) == true;'
+            - lambda: 'return id(heater_state) == false;'
+            - lambda: 'return id(ac_state) == true;'
+            # ac check??
+        then:
+          - logger.log: "AC is on, should turned off"
+          - lambda: |-
+              // Turn AC OFF
+              id(${display_id}).send_command_printf("page0.hvac.pic=%d", id(ac_off_pic));
+              id(${display_id}).send_command_printf("page0.hvac.pic2=%d", id(ac_off_pic));
+              id(internal_led).turn_off();
+              id(ac_state) = false;
+        else:
+          - logger.log: "hvac is off, should turned on"
+          - lambda: |-
+              // Turn AC ON
+              id(${display_id}).send_command_printf("page0.hvac.pic=%d", id(ac_on_pic));
+              id(${display_id}).send_command_printf("page0.hvac.pic2=%d", id(ac_on_pic));
+              id(internal_led).turn_on();
+              id(ac_state) = true;
+      
+  # UP BUTTON
+  - platform: nextion
+    page_id: 0
+    component_id: 11
+    id: up
+    name: Up
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_up_state" } } # inline syntax
+    on_press:
+      then:
+        - logger.log: "Up pressed"
+    on_release:
+      then:
+        - logger.log: "Up released"
+        - lambda: |-
+            if(id(unit_state) ){ // && id(auto_mode_state)
+              id(settemp_value) = id(settemp_value) + 0.5;
+              id(${display_id}).set_component_text_printf("page0.settemp", "%.1f", id(settemp_value));
+              if( id(settemp_value) > id(room_temp).state ) {
+                // Turn ON Heater
+                id(heater_template_switch).turn_on();
+              }
+            }
+
+  # DOWN BUTTON
+  - platform: nextion
+    page_id: 0
+    component_id: 15
+    #component_name: page0.down
+    id: down
+    name: Down
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_down_state" } } # inline syntax
+    on_press:
+      lambda: |-
+        ESP_LOGD("main", "Down pressed");
+    on_release:
+      then:
+        - logger.log: "Down released"
+        - lambda: |-
+            if(id(unit_state) ){ // && id(auto_mode_state)
+              id(settemp_value) = id(settemp_value) - 0.5;
+              id(${display_id}).set_component_text_printf("page0.settemp", "%.1f", id(settemp_value));
+
+              if( id(settemp_value) <= id(room_temp).state ) {
+                // Turn OFF Heater
+                id(heater_template_switch).turn_off();
+              }
+            }
+
+######################################
+# SENSOR SECTION
+######################################
+sensor:
+  ######################################
+  # BME680 SENSOR SECTION
+  ######################################
+  - platform: bme680_bsec
+    temperature:
+      name: "Temperature"
+      id: room_temp
+      sample_rate: ulp
+      filters:
+        - median
+      unit_of_measurement: "°C"
+      <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_temperature" } } # inline syntax
+      on_value_range:
+        - above: 21.0
+          then:
+            #- ESP_LOGD("ble_adv", "temperature=%.2f", id(room_temp).state);
+            - logger.log:
+                format: "The roomtemp above 21 %f"
+                args: [ 'id(room_temp).state' ]
+        - below: 21.0
+          then:
+            - logger.log:
+                format: "The roomtemp below 21 %f"
+                args: [ 'id(room_temp).state' ]
+      on_value:
+        - mqtt.publish:
+            topic: "Livingroom/Thermostat/${device_name}/Temperature"
+            payload: !lambda |-
+              char buf[200];
+              sprintf(buf,"wether3,location=Budapest temperature=%.2f", id(room_temp).state);
+              return ((std::string) buf).c_str();
+        - logger.log:
+            format: "The OpenWeatherMap reported value %f"
+            args: [ 'id(weather_temperature).state' ]
+        - lambda: |-
+            if( (id(room_temp).state > id(settemp_value)) && id(unit_state) && id(auto_mode_state)) { //&& id(auto_mode_state)
+              // Turn OFF Heater
+              id(heater_template_switch).turn_off();
+            }
+            if( (id(room_temp).state <= id(settemp_value)) && id(unit_state) ) { //&& id(auto_mode_state)
+              // Turn ON Heater
+              id(heater_template_switch).turn_on();
+            }
+      
+    pressure:
+      name: "Pressure"
+      id: room_pressure
+      sample_rate: ulp
+      filters:
+        - median
+      <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_pressure" } } # inline syntax
+      on_value:
+        - mqtt.publish:
+            topic: "Livingroom/Thermostat/${device_name}/Pressure"
+            payload: !lambda |-
+              char buf[200];
+              sprintf(buf,"wether3,location=Budapest pressure=%.4f", id(room_pressure).state);
+              return ((std::string) buf).c_str();
+      
+    humidity:
+      name: "Humidity"
+      id: room_humidity
+      sample_rate: ulp
+      filters:
+        - median
+      <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_humidity" } } # inline syntax
+      on_value:
+        #- mqtt.publish:
+        #    topic: "Livingroom/Thermostat/${device_name}/Humidity"
+        #    payload: !lambda |-
+        #      char buf[200];
+        #      sprintf(buf,"wether3,location=Budapest humidity=%.1f", id(room_humidity).state);
+        #      return ((std::string) buf).c_str();
+        - mqtt.publish_json:
+            topic: ${topic_message}
+            payload: !lambda |-
+              root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+              root["room"] = "${device_location}";
+              root["floor"] = "${device_floor}";
+              root["payload"]["measures"]["humidity"] = id(room_humidity).state;
+              root["timestamp"] = id(homeassistant_time).now().timestamp;
+      
+    gas_resistance:
+      name: "Gas Resistance"
+      id: room_gas_resistance
+      filters:
+        - median
+      <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_gas_resistance" } } # inline syntax
+      on_value:
+        - mqtt.publish:
+            topic: "Livingroom/Thermostat/${device_name}/Gas"
+            payload: !lambda |-
+              char buf[200];
+              sprintf(buf,"wether3,location=Budapest gas=%.1f", id(room_gas_resistance).state);
+              return ((std::string) buf).c_str();
+      
+    iaq:
+      # Indoor air quality value
+      name: "IAQ"
+      id: iaq
+      filters:
+        - median
+      <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_iaq" } } # inline syntax
+      on_value:
+        - mqtt.publish:
+            topic: "Livingroom/Thermostat/${device_name}/IAQ"
+            payload: !lambda |-
+              char buf[200];
+              sprintf(buf,"IAQ=%.2f ppm", id(iaq).state);
+              return ((std::string) buf).c_str();
+      
+    iaq_accuracy:
+      # IAQ accuracy as a numeric value of 0, 1, 2, 3
+      name: "Numeric IAQ Accuracy"
+      id: iaq_accuracy
+      <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_iaq_accuracy" } } # inline syntax
+    
+    co2_equivalent:
+      # CO2 equivalent estimate in ppm
+      name: "CO2 Equivalent"
+      id: co2_equivalent
+      filters:
+        - median
+      <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_co2_equivalent" } } # inline syntax
+      on_value:
+        - mqtt.publish:
+            topic: "Livingroom/Thermostat/${device_name}/CO2_Equivalent"
+            payload: !lambda |-
+              char buf[200];
+              sprintf(buf,"CO2 Equivalent=%.2f ppm", id(co2_equivalent).state);
+              return ((std::string) buf).c_str();
+      
+    breath_voc_equivalent:
+      # Volatile organic compounds equivalent estimate in ppm
+      name: "Breath VOC Equivalent"
+      id: breath_voc_equivalent
+      filters:
+        - median
+      <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_breath_voc_equivalent" } } # inline syntax
+      on_value:
+        - mqtt.publish:
+            topic: "Livingroom/Thermostat/${device_name}/Breath_VOC_Equivalent"
+            payload: !lambda |-
+              char buf[200];
+              sprintf(buf,"Breath VOC Equivalent=%.2f ppm", id(breath_voc_equivalent).state);
+              return ((std::string) buf).c_str();
+
+  ######################################
+  # HOMEASSISTANT OpenWeatherMap
+  ######################################
+  # OpenWeatherMap sensor.openweathermap_weather_code
+  - platform: homeassistant
+    name: "OpenWeatherMap Weather"
+    entity_id: sensor.openweathermap_weather_code
+    id: weather_code
+    internal: true
+  # OpenWeatherMap sensor.openweathermap_temperature
+  - platform: homeassistant
+    name: "OpenWeatherMap Temperature"
+    entity_id: sensor.openweathermap_temperature
+    id: weather_temperature
+    internal: true
+    on_value:
+      then:
+        - logger.log:
+                format: "The OpenWeatherMap temp is %f"
+                args: [ 'id(weather_temperature).state' ]
+  # OpenWeatherMap sensor.openweathermap_humidity
+  - platform: homeassistant
+    name: "OpenWeatherMap Humidity"
+    entity_id: sensor.openweathermap_humidity
+    id: weather_humidity
+    internal: true
+  # OpenWeatherMap sensor.openweathermap_wind_speed
+  - platform: homeassistant
+    name: "OpenWeatherMap Windspeed"
+    entity_id: sensor.openweathermap_wind_speed
+    id: weather_windspeed
+    internal: true
+  # OpenWeatherMap sensor.openweathermap_rain
+  - platform: homeassistant
+    name: "OpenWeatherMap Rain"
+    entity_id: sensor.openweathermap_rain
+    id: weather_rain
+    internal: true
+
+  ######################################
+  # WIFI Signal
+  ######################################
+  - platform: wifi_signal
+    name: "${device_name} - WiFi Signal"
+    update_interval: 60s
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "wifi_signal" } } # inline syntax
+
+######################################
+# TEXT SENSOR SECTION
+######################################
+text_sensor:
+  ######################################
+  # IAQ accuracy as a text value of Stabilizing, Uncertain, Calibrating, Calibrated
+  ######################################
+  - platform: bme680_bsec
+    iaq_accuracy:
+      # IAQ accuracy as a text value of Stabilizing, Uncertain, Calibrating, Calibrated
+      name: "IAQ Accuracy"
+  - platform: template
+    name: "IAQ Classification"
+    icon: "mdi:checkbox-marked-circle-outline"
+    id: template_iaq_accuracy_classification
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "text_sensor", component_id: "iaq_accuracy_classification" } } # inline syntax
+    lambda: |-
+      if ( int(id(iaq).state) <= 50) {
+        return {"Excellent"};
+      }
+      else if (int(id(iaq).state) >= 51 && int(id(iaq).state) <= 100) {
+        return {"Good"};
+      }
+      else if (int(id(iaq).state) >= 101 && int(id(iaq).state) <= 150) {
+        return {"Lightly polluted"};
+      }
+      else if (int(id(iaq).state) >= 151 && int(id(iaq).state) <= 200) {
+        return {"Moderately polluted"};
+      }
+      else if (int(id(iaq).state) >= 201 && int(id(iaq).state) <= 250) {
+        return {"Heavily polluted"};
+      }
+      else if (int(id(iaq).state) >= 251 && int(id(iaq).state) <= 350) {
+        return {"Severely polluted"};
+      }
+      else if (int(id(iaq).state) >= 351) {
+        return {"Extremely polluted"};
+      }
+      else {
+        return {"error"};
+      }
+
+######################################
+# SWITCH SECTION
+######################################
+switch:
+  # Internal LED turn ON/OFF
+  - platform: gpio
+    pin: GPIO02 #internal LED
+    name: "Internal LED"
+    id: internal_led
+    restore_mode: ALWAYS_OFF
+    <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "internal_led" } } # inline syntax
+    on_turn_on:
+      - mqtt.publish:
+            topic: "Livingroom/Thermostat/relay/state"
+            payload: !lambda |-
+              return id(internal_led).state ? "ON" : "OFF";
+    on_turn_off:
+      - mqtt.publish:
+            topic: "Livingroom/Thermostat/relay/state"
+            payload: !lambda |-
+              return id(internal_led).state ? "ON" : "OFF";
+  
+  ######################################
+  # TEMPLATE SWITCH - ON/OFF
+  #   handle Unit & ICONS ON/OFF actions
+  #   turn ON/OFF Thermosta unit
+  ######################################
+  - platform: template
+    name: "Unit ON/OFF switch"
+    id: OnOff_template_switch
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "switch", component_id: "unit_onoff" } } # inline syntax
+    turn_on_action:
+      - logger.log: "The Unit is turned ON"
+      - lambda: |-
+          id(unit_state) = true;
+
+          id(${display_id}).send_command_printf("page0.on_off.pic=%d", id(on_off_on_pic));
+          id(${display_id}).send_command_printf("page0.on_off.pic2=%d", id(on_off_on_pic));
+          
+          id(${display_id}).send_command_printf("tsw hvac,1");
+          id(${display_id}).send_command_printf("tsw heater,1");
+    turn_off_action:
+      - lambda: |-
+          id(unit_state) = false;
+
+          id(heater_template_switch).turn_off();
+          id(${display_id}).send_command_printf("tsw hvac,0");
+
+          id(ac_template_switch).turn_off();
+          id(${display_id}).send_command_printf("tsw heater,0");
+
+          id(${display_id}).send_command_printf("page0.on_off.pic=%d", id(on_off_on_pic));
+          id(${display_id}).send_command_printf("page0.on_off.pic2=%d", id(on_off_on_pic));
+
+  ######################################
+  # TEMPLATE SWITCH - HEATER
+  #   handle HEATER & ICONS ON/OFF actions
+  #   handle child device(s) actions --> turn ON/OFF Relay for Boiler|Heater unit
+  ######################################
+  - platform: template
+    name: "Heater switch"
+    id: heater_template_switch
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "switch", component_id: "heater_onoff" } } # inline syntax
+    turn_on_action:
+      - switch.turn_on: internal_led
+      - logger.log: "The Heater is turned ON"
+      - lambda: |-
+          id(ac_template_switch).turn_off();
+          id(heater_state) = true;
+          id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_on_pic));
+          id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_on_pic));
+          id(internal_led).turn_on();
+          id(${display_id}).send_command_printf("tsw hvac,0");
+      - mqtt.publish_json:
+          topic: ${topic_command}
+          payload: |-
+            root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+            root["receiver"] = "${controlled_device}";
+            root["room"] = "${device_location}";
+            root["floor"] = "${device_floor}";
+            root["payload"]["command"] = "ON";
+            root["trigger"] = "switch on_turn_on";
+            root["timestamp"] = id(homeassistant_time).now().timestamp;
+    turn_off_action:
+      #then:
+        #- if:
+        #    condition:
+        #      lambda: 'return id(auto_mode_state) == true;'
+        #    then:
+              - switch.turn_off: internal_led
+              - lambda: |-
+                  id(heater_state) = false;
+                  id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_off_pic));
+                  id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_off_pic));
+                  id(${display_id}).send_command_printf("tsw hvac,1");
+              - mqtt.publish_json:
+                  topic: ${topic_command}
+                  payload: |-
+                    root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+                    root["receiver"] = "${controlled_device}";
+                    root["room"] = "${device_location}";
+                    root["floor"] = "${device_floor}";
+                    root["payload"]["command"] = "OFF";
+                    root["trigger"] = "switch on_turn_off";
+                    root["timestamp"] = id(homeassistant_time).now().timestamp;
+
+  ######################################
+  # TEMPLATE SWITCH - AC
+  #   handle AC and ICONS ON/OFF actions
+  #   handle child device(s) actions --> turn ON/OFF Relay for AC unit
+  ######################################
+  - platform: template
+    name: "AC switch"
+    id: ac_template_switch
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "switch", component_id: "ac_onoff" } } # inline syntax
+    turn_on_action:
+      - switch.turn_on: internal_led
+      - logger.log: "The AC is turned ON"
+      - lambda: |-
+          id(heater_template_switch).turn_off();
+          id(ac_state) = true;
+          id(${display_id}).send_command_printf("page0.hvac.pic=%d", id(ac_on_pic));
+          id(${display_id}).send_command_printf("page0.hvac.pic2=%d", id(ac_on_pic));
+          id(internal_led).turn_on();
+          
+          id(${display_id}).send_command_printf("tsw heater,0");
+    turn_off_action:
+      - switch.turn_on: internal_led
+      - logger.log: "The AC is turned OFF"
+      - lambda: |-
+          id(ac_state) = false;
+          id(${display_id}).send_command_printf("page0.hvac.pic=%d", id(ac_off_pic));
+          id(${display_id}).send_command_printf("page0.hvac.pic2=%d", id(ac_off_pic));
+          id(${display_id}).send_command_printf("tsw heater,1");
+
+#####################################
+# BUTTON SECTION
+######################################
+button:
+  <<: !include includes/components/.components.button.restart.yaml
+  <<: !include includes/components/.components.button.restart-factory.yaml

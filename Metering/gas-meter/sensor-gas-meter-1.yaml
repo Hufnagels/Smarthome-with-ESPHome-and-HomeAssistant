@@ -1,0 +1,254 @@
+# Wemos D1 mini board
+# Reed Sensor
+#   REED SW 0.5/10 MF15
+#   REED SW.Us:200V Is:0.5A Ps:10W 10mm hossz üvegcső KSK1A87-1520
+#   https://www.hqelektronika.hu/reed-swus200v-is05a-ps10w-10mm-uvegcso-hossz-reed-sw-05-10-mf15
+#   10kOhm
+
+######################################
+# SUBSTITUIONS SECTION
+######################################
+substitutions:
+  device_type: Sensor
+  device_subtype: Gasmeter
+  device_number: "1"
+  device_name: sensor-gas-meter-1
+  device_group: Metering
+
+  device_location: Hall
+  device_floor: Ground floor
+  
+  unit_name: ""
+  parent_device: "_"
+  child_devices: "{}"
+  controlled_device: ""
+
+  <<: !include includes/base/.base.substitutions.yaml
+
+  # MQTT topic prefix for testing
+  <<: !include includes/mqtt/.mqtt.topic-prefix.yaml
+  # MQTT default topics
+  <<: !include includes/mqtt/.mqtt.default-topics.yaml
+  # MQTT device specific topics
+
+  # Homeassistant entities for temperature
+  <<: !include includes/ha/.ha.entities-temperature.yaml
+
+  # update 1
+  # https://community.home-assistant.io/t/track-a-gas-meter-with-esphome/162669/26
+  # BK-4GM 1 imp = 0.01 m³ => 1 / 0.01 = 100 imp / m³
+  # Gas Meter Settings
+  gas_imp_value: '100' # impulses / m³ 
+  gas_imp_debounce_on: '0.01 s'
+  gas_imp_debounce_off: '0.1 s'
+  gas_init_val: '9917.810' #2023.03.23
+
+  # PIN settings
+    # D8 (you could use an digital pin)
+  gas_read_pin: D1 
+
+  # Device friendly name
+  friendly_name: ${device_type} ${device_subtype} ${device_number}
+
+######################################
+# ESPHOME SECTION
+######################################
+esphome:
+  # Project/Board definition
+  <<: !include includes/base/.base.esphome-definition.yaml
+  # Board type
+  <<: !include includes/boards/.board.wemos-d1-mini.yaml
+  project:
+    <<: !include projects/gas-meter-bk-g4m.yaml
+
+######################################
+# PACKAGES SECTION
+######################################
+packages:
+  mqtt: !include includes/mqtt/.mqtt.base-params.yaml
+  text_sensor: !include includes/components/.components.text_sensor.wifi-connection-data.yaml
+
+######################################
+# Connection SECTION: wifi, api, ota
+######################################
+<<: !include includes/base/.base.connection-settings.yaml
+
+######################################
+# HA DATE-TYME SYNC SECTION
+######################################
+<<: !include includes/ha/.ha.time-sync.yaml
+
+######################################
+# DEEP-SLEEP SECTION
+######################################
+#deep_sleep:
+#  id: deep_sleep_1
+#  run_duration: 20s
+#  sleep_duration: 5min
+
+######################################
+# MQTT SECTION
+######################################
+mqtt:
+  on_connect:
+    - lambda: |- 
+        id(mqtt_connection_state) = true;
+    - logger.log: "${friendly_name} connected"
+  on_disconnect:
+    - logger.log: "${friendly_name} disconnected"
+
+######################################
+# FONT SECTION
+######################################
+font:
+  - file: 'fonts/wef.ttf'
+    id: font_wef_9
+    size: 13
+  - file: 'fonts/Roboto-Regular.ttf'
+    id: roboto_regular_9
+    size: 10
+
+######################################
+# GLOBALS SECTION
+######################################
+globals:
+  - id: gas_impulses
+    type: int
+    restore_value: true # if set to false, the value will be 0 at reboot
+    initial_value: '0'
+  # set the Gasmeter initial value like: 9911.013
+  - id: initial_gas_value
+    type: float
+    restore_value: true 
+    initial_value: ${gas_init_val}
+  - id: mqtt_connection_state
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+
+######################################
+# I2C SECTION
+######################################
+i2c:
+  sda: D2
+  scl: D1
+
+######################################
+# 0.96" DISPLAY SECTION
+######################################
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 64x48"
+    reset_pin: D0
+    address: 0x3C
+    lambda: |-
+      // Manual/Auto state
+      //it.print(0, 0, id(roboto_regular_9), id(auto_mode) ? "A":"M");
+      // Separator
+      it.line(12, 0, 12, 12);
+      // Heater state
+      //it.print(18, 0, id(roboto_regular_9), id(heater_1_switch).state ? "H: +":"H: -");
+      // Separator
+      it.line(39, 0, 39, 12);
+      // MQTT state
+      it.print(45, 0, id(roboto_regular_9), id(mqtt_connection_state) ? "M: +":"M: -");
+      
+      // Print time in HH:MM format
+      it.strftime(63, 26, id(roboto_regular_9), TextAlign::RIGHT, "%H:%M", id(homeassistant_time).now());
+      // Print date in YYYY.MM.DD format
+      it.strftime(63, 37, id(roboto_regular_9), TextAlign::RIGHT, "%Y.%m.%d", id(homeassistant_time).now());
+
+######################################
+# BINARY SENSOR SECTION
+######################################
+binary_sensor:
+  # Reed switch
+  - platform: gpio
+    id: gas_impulse
+    internal: true
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "gas_impulse" } } # inline syntax
+    pin:
+      number: $gas_read_pin
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_off: $gas_imp_debounce_off
+    on_press:
+      then:
+        - lambda: id(gas_impulses) += 1;
+
+######################################
+# SENSOR SECTION
+######################################
+sensor:
+  - platform: pulse_meter
+    name: "Gas usage m³/min"
+    id: gas_usage_minute
+    unit_of_measurement: 'm³/min'
+    internal_filter: $gas_imp_debounce_on
+    timeout: 1 min
+    state_class: measurement
+    device_class: gas
+    icon: mdi:meter-gas
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "gas_usage_minute" } } # inline syntax
+    #accuracy_decimals: 3
+    pin:
+      number: $gas_read_pin
+      mode: INPUT_PULLUP
+      inverted: true
+    filters: # 1 imp / 0.1 m³ = 10 imp / m³ (in my case); gas_imp_value = 10;
+      - lambda: !lambda |-
+          ESP_LOGD("custom", "gas_usage: %d", id(gas_usage_minute)); 
+          return x * (1.0 / ${gas_imp_value});
+    on_value:
+      then:
+        - switch.turn_on: internal_led
+    
+  - platform: template
+    name: "Gas usage m³"
+    id: gas_usage_total
+    unit_of_measurement: 'm³'
+    icon: mdi:meter-gas-outline
+    state_class: total_increasing
+    device_class: gas
+    accuracy_decimals: 2
+    lambda: return id(gas_impulses) * (1.0 / ${gas_imp_value});
+    update_interval: 10 s
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "gas_usage_m3" } } # inline syntax
+
+  - platform: template
+    name: "Gas Meter Total m³"
+    id: gas_usage_total_on_meter
+    unit_of_measurement: 'm³'
+    icon: mdi:meter-gas-outline
+    state_class: total_increasing
+    device_class: gas
+    accuracy_decimals: 2
+    lambda: return (id(initial_gas_value) + id(gas_impulses) * (1.0 / ${gas_imp_value}));
+    update_interval: 10 s
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "gas_meter_total_m3" } } # inline syntax
+
+######################################
+# SWITCH SECTION
+######################################
+switch:
+  # Internal Led for feedback measure 
+  - platform: gpio
+    pin: GPIO02 #internal LED
+    inverted: True
+    name: "Internal LED"
+    id: internal_led
+    restore_mode: RESTORE_DEFAULT_OFF
+    <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "internal_led" } } # inline syntax
+    on_turn_on:
+      - delay: 10ms
+      - switch.turn_off: internal_led
+    #  - mqtt.publish:
+    #        topic: "Livingroom/Thermostat/relay/state"
+    #        payload: !lambda |-
+    #          return id(internal_led).state ? "ON" : "OFF";
+    #on_turn_off:
+    #  - mqtt.publish:
+    #        topic: "Livingroom/Thermostat/relay/state"
+    #        payload: !lambda |-
+    #          return id(internal_led).state ? "ON" : "OFF";
