@@ -8,7 +8,7 @@ substitutions:
   device_type: Camera
   device_subtype: Indoor
   device_number: "2"
-  device_name: camera-indoor-2
+  device_name: camera-indoor-${device_number}
   device_group: Survillance
 
   device_location: Livingroom
@@ -36,7 +36,7 @@ esphome:
   # Board type
   <<: !include includes/boards/.board.esp32-cam.yaml
   project:
-    <<: !include projects/livingroom-cam.yaml
+    <<: !include includes/projects/livingroom-cam.yaml
 
 ######################################
 # PACKAGES SECTION
@@ -89,11 +89,11 @@ esp32_camera:
   power_down_pin: GPIO32
 
   # Image settings
-  name: $device_name
+  name: Image
 
 # Image/Video settings, https://esphome.io/components/esp32_camera.html
 
-  max_framerate: 25 fps    # default: 10 fps, max 60
+  max_framerate: 10 fps    # default: 10 fps, max 60
   idle_framerate: 0.2 fps # default: 0.1 fps - framerate for 'picture' in HA dashboard
   resolution: 1024x768
   jpeg_quality: 8
@@ -125,7 +125,7 @@ light:
   #flashlight
   - platform: binary
     output: gpio_4
-    name: $device_name light
+    name: Light
     <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "light", component_id: "flashlight" } } # inline syntax
 
 ######################################
@@ -133,7 +133,7 @@ light:
 ######################################
 sensor:
   - platform: uptime
-    name: $device_name Uptime
+    name: Uptime
     <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "uptime" } } # inline syntax
 
 ######################################

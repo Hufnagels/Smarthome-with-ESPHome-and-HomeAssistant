@@ -2,8 +2,10 @@
 # 64x48 OLED shield
 # 1ch Relay (5V)
 # 1 push button for manually ON/OFF 
-
-# ESP_LOGD("ble_adv", "Testing %s", uuid_t.c_str());
+# Version: 0.3.1
+#   Single-point Thermostat Relay unit
+#   TODO:
+#     - RF for using wo HA
 
 ######################################
 # SUBSTITUIONS SECTION
@@ -12,7 +14,7 @@ substitutions:
   device_type: Thermostat
   device_subtype: Relay
   device_number: "1"
-  device_name: thermostat-relay-1
+  device_name: thermostat-relay-${device_number}
   device_group: Climate
 
   device_location: Livingroom
@@ -43,7 +45,7 @@ esphome:
   # Board type
   <<: !include includes/boards/.board.wemos-d1-mini-pro.yaml
   project:
-    <<: !include projects/livingroom-thermostat.yaml
+    <<: !include includes/projects/livingroom-thermostat.yaml
   on_boot:
     priority: 200
     then:
@@ -113,6 +115,11 @@ mqtt:
                 id(auto_mode) = true;
                 id(heater_1_switch).turn_off();
                 //id(ma_switch).turn_on();  // MANUAL MODE
+              }
+              if (x["payload"]["command"] == "IDLE" ) {
+                id(auto_mode) = true;
+                id(heater_1_switch).turn_off();
+                id(ma_switch).turn_off();  // MANUAL MODE
               }
             }
 

@@ -12,7 +12,7 @@ substitutions:
   device_type: Sensor
   device_subtype: Gasmeter
   device_number: "1"
-  device_name: sensor-gas-meter-1
+  device_name: sensor-gasmeter-${device_number}
   device_group: Metering
 
   device_location: Hall
@@ -41,11 +41,13 @@ substitutions:
   gas_imp_value: '100' # impulses / m³ 
   gas_imp_debounce_on: '0.01 s'
   gas_imp_debounce_off: '0.1 s'
-  gas_init_val: '9917.810' #2023.03.23
+  gas_init_val: '9965.998' 
+  #2023.03.23   '9917.810'
+  #2023.04.06   '9965.998'
 
   # PIN settings
     # D8 (you could use an digital pin)
-  gas_read_pin: D1 
+  gas_read_pin: D3 
 
   # Device friendly name
   friendly_name: ${device_type} ${device_subtype} ${device_number}
@@ -59,7 +61,11 @@ esphome:
   # Board type
   <<: !include includes/boards/.board.wemos-d1-mini.yaml
   project:
-    <<: !include projects/gas-meter-bk-g4m.yaml
+    <<: !include includes/projects/gas-meter-bk-g4m.yaml
+  on_boot:
+    priority: 200
+    then:
+    - switch.turn_off: measure_switch
 
 ######################################
 # PACKAGES SECTION
@@ -168,7 +174,7 @@ binary_sensor:
     internal: true
     <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "gas_impulse" } } # inline syntax
     pin:
-      number: $gas_read_pin
+      number: ${gas_read_pin}
       mode: INPUT_PULLUP
       inverted: true
     filters:
@@ -189,11 +195,11 @@ sensor:
     timeout: 1 min
     state_class: measurement
     device_class: gas
-    icon: mdi:meter-gas
+    icon: mdi:meter-gas-outline
     <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "gas_usage_minute" } } # inline syntax
     #accuracy_decimals: 3
     pin:
-      number: $gas_read_pin
+      number: ${gas_read_pin}
       mode: INPUT_PULLUP
       inverted: true
     filters: # 1 imp / 0.1 m³ = 10 imp / m³ (in my case); gas_imp_value = 10;
@@ -202,13 +208,13 @@ sensor:
           return x * (1.0 / ${gas_imp_value});
     on_value:
       then:
-        - switch.turn_on: internal_led
+        - switch.turn_on: measure_switch
     
   - platform: template
     name: "Gas usage m³"
     id: gas_usage_total
     unit_of_measurement: 'm³'
-    icon: mdi:meter-gas-outline
+    icon: mdi:meter-gas
     state_class: total_increasing
     device_class: gas
     accuracy_decimals: 2
@@ -220,29 +226,54 @@ sensor:
     name: "Gas Meter Total m³"
     id: gas_usage_total_on_meter
     unit_of_measurement: 'm³'
-    icon: mdi:meter-gas-outline
+    icon: mdi:meter-gas
     state_class: total_increasing
     device_class: gas
     accuracy_decimals: 2
     lambda: return (id(initial_gas_value) + id(gas_impulses) * (1.0 / ${gas_imp_value}));
-    update_interval: 10 s
+    update_interval: 60 s
     <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "gas_meter_total_m3" } } # inline syntax
 
 ######################################
 # SWITCH SECTION
 ######################################
 switch:
-  # Internal Led for feedback measure 
+  ######################################
+  # MEASURING CONTROLL LED
+  ######################################
   - platform: gpio
-    pin: GPIO02 #internal LED
-    inverted: True
-    name: "Internal LED"
-    id: internal_led
-    restore_mode: RESTORE_DEFAULT_OFF
-    <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "internal_led" } } # inline syntax
-    on_turn_on:
+    pin: D7
+    name: "Measuring control LED"
+    id: measure_switch
+    <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "manual_auto_switch" } } # inline syntax
+    on_turn_on: # MANUAL MODE
       - delay: 10ms
-      - switch.turn_off: internal_led
+      - switch.turn_off: measure_switch
+      #- lambda: id(auto_mode) = false;
+      #- mqtt.publish_json:
+      #    topic: ${topic_command}
+      #    payload: |-
+      #      root["sender"] = "${device_type}_${device_subtype}_${device_number}";
+      #      root["receiver"] = "${parent_device}";
+      #      root["room"] = "${device_location}";
+      #      root["floor"] = "${device_floor}";
+      #      root["payload"]["command"] = "ON";
+      #      root["payload"]["description"] = "Manual mode is ON | Auto mode is OFF";
+      #      root["trigger"] = "switch on_turn_on";
+      #      root["timestamp"] = id(homeassistant_time).now().timestamp;
+    
+  
+  # Internal Led for feedback measure 
+  #- platform: gpio
+  #  pin: GPIO02 #internal LED
+  #  inverted: True
+  #  name: "Internal LED"
+  #  id: internal_led
+  #  restore_mode: RESTORE_DEFAULT_OFF
+  #  <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "internal_led" } } # inline syntax
+  #  on_turn_on:
+  #    - delay: 10ms
+  #    - switch.turn_off: internal_led
     #  - mqtt.publish:
     #        topic: "Livingroom/Thermostat/relay/state"
     #        payload: !lambda |-
@@ -252,3 +283,10 @@ switch:
     #        topic: "Livingroom/Thermostat/relay/state"
     #        payload: !lambda |-
     #          return id(internal_led).state ? "ON" : "OFF";
+
+#####################################
+# BUTTON SECTION
+######################################
+button:
+  <<: !include includes/components/.components.button.restart.yaml
+  <<: !include includes/components/.components.button.restart-factory.yaml

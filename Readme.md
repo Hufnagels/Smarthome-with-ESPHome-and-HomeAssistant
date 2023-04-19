@@ -54,6 +54,15 @@ button:
 ```
 <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "internal_led" } } # inline syntax
 ```
+
+* NEXTION settings
+ 
+For the ESPHome to communicate, the HMI also needs to be configured not to send responses on the commands. Higher port speed produce errors. To do that, in the Nextion Editor, in the Program.s tab, add these two commands before the page line.
+```
+baud=9600
+bkcmd=0
+```
+
 > #### 0.2.0
 
 > #### 0.1.0

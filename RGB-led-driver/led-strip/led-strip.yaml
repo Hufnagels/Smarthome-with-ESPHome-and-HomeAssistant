@@ -12,7 +12,7 @@ substitutions:
   device_type: LED-strip
   device_subtype: RGB
   device_number: "1"
-  device_name: led-strip-rgb-1
+  device_name: led-strip-rgb-${device_number}
   device_group: Lighting
   
   device_location: Kidroom
@@ -20,7 +20,7 @@ substitutions:
 
   unit_name: ""
   parent_device: ""
-  child_devices: "{Relay_1}"
+  child_devices: "{}"
   controlled_device: ""
 
   <<: !include includes/base/.base.substitutions.yaml
@@ -32,6 +32,13 @@ substitutions:
 
   # MQTT device specific topics
 
+  # PIN config
+  pin_R: D3
+  pin_G: D2
+  pin_B: D8 
+  # Light component id
+  light_component_id: rgb_5050_strip
+
 ######################################
 # ESPHOME SECTION
 ######################################
@@ -41,17 +48,23 @@ esphome:
   # Board type
   <<: !include includes/boards/.board.wemos-d1-mini.yaml
   project:
-    <<: !include projects/rgb-ledstrip.yaml
+    <<: !include includes/projects/rgb-ledstrip.yaml
+  on_boot:
+    priority: 200
+    then:
+      - light.turn_off: ${light_component_id}
+      - switch.turn_off: internal_led
   on_shutdown:
     priority: 700
     then:
-      - light.turn_off: light_1
+      - light.turn_off: ${light_component_id}
 
 ######################################
 # PACKAGES SECTION
 ######################################
 packages:
   mqtt: !include includes/mqtt/.mqtt.base-params.yaml
+  text_sensor: !include includes/components/.components.text_sensor.wifi-connection-data.yaml
 
 ######################################
 # Connection SECTION: wifi, api, ota
@@ -72,9 +85,9 @@ packages:
 ######################################
 light:
   - platform: rgb
-    id: light_1
-    name: "${device_location} ${device_type} ${device_subtype} Lights"
-    <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "light", component_id: "light_1" } } # inline syntax
+    id: ${light_component_id}
+    name: "${light_component_id} Lights"
+    <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "light", component_id: "${light_component_id}" } } # inline syntax
     red: output_component_R
     green: output_component_G
     blue: output_component_B
@@ -88,15 +101,15 @@ light:
               root["room"] = "${device_location}";
               root["floor"] = "${device_floor}";
               root["payload"]["state"] = "ON";
-              root["payload"]["brightness"] = id(light_1)->remote_values.get_brightness() * 255;
-              root["payload"]["red"] = id(light_1)->remote_values.get_red() * 255;
-              root["payload"]["green"] = id(light_1)->remote_values.get_green() * 255;
-              root["payload"]["blue"] = id(light_1)->remote_values.get_blue() * 255;
+              root["payload"]["brightness"] = id(${light_component_id})->remote_values.get_brightness() * 255;
+              root["payload"]["red"] = id(${light_component_id})->remote_values.get_red() * 255;
+              root["payload"]["green"] = id(${light_component_id})->remote_values.get_green() * 255;
+              root["payload"]["blue"] = id(${light_component_id})->remote_values.get_blue() * 255;
               root["trigger"] = "light on_turn_on";
               root["timestamp"] = id(homeassistant_time).now().timestamp;
     on_turn_off:
-    - logger.log: "Light Turned Off!"
-    - mqtt.publish_json:
+      - logger.log: "Light Turned Off!"
+      - mqtt.publish_json:
             topic: ${topic_basetopic}/state
             payload: |-
               root["sender"] = "${device_type}_${device_subtype}_${device_number}";
@@ -107,8 +120,8 @@ light:
               root["trigger"] = "light on_sturn_off";
               root["timestamp"] = id(homeassistant_time).now().timestamp;
     on_state:
-    - logger.log: "Light State Changed!"
-    - mqtt.publish_json:
+      - logger.log: "Light State Changed!"
+      - mqtt.publish_json:
             topic: ${topic_basetopic}/state
             payload: |-
               root["sender"] = "${device_type}_${device_subtype}_${device_number}";
@@ -116,29 +129,47 @@ light:
               root["room"] = "${device_location}";
               root["floor"] = "${device_floor}";
               root["payload"]["state"] = "ON";
-              root["payload"]["brightness"] = id(light_1)->remote_values.get_brightness() * 255;
-              root["payload"]["red"] = id(light_1)->remote_values.get_red() * 255;
-              root["payload"]["green"] = id(light_1)->remote_values.get_green() * 255;
-              root["payload"]["blue"] = id(light_1)->remote_values.get_blue() * 255;
+              root["payload"]["brightness"] = id(${light_component_id})->remote_values.get_brightness() * 255;
+              root["payload"]["red"] = id(${light_component_id})->remote_values.get_red() * 255;
+              root["payload"]["green"] = id(${light_component_id})->remote_values.get_green() * 255;
+              root["payload"]["blue"] = id(${light_component_id})->remote_values.get_blue() * 255;
               root["trigger"] = "light on_state";
               root["timestamp"] = id(homeassistant_time).now().timestamp;
+    <<: !include includes/projects/rgb-ledstrip-effects.yaml
     
 ######################################
 # OUTPUT SECTION
 ######################################
 output:
   - platform: esp8266_pwm
-    id: output_component_R
-    pin: D4
+    id: output_component_B
+    pin: ${pin_B}
     max_power: 100%
   - platform: esp8266_pwm
     id: output_component_G
-    pin: D2
+    pin: ${pin_G}
     max_power: 100%
   - platform: esp8266_pwm
-    id: output_component_B
-    pin: D3
+    id: output_component_R
+    pin: ${pin_R}
     max_power: 100%
+
+######################################
+# SWITCH SECTION
+######################################
+switch:
+  # Internal Led for feedback 
+  - platform: gpio
+    pin:
+      number: D4
+      inverted: true
+    name: "Internal LED"
+    id: internal_led
+    restore_mode: RESTORE_DEFAULT_OFF
+    <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "internal_led" } } # inline syntax
+    on_turn_on:
+      - delay: 10ms
+      - switch.turn_off: internal_led
 
 ######################################
 # BUTTON SECTION
