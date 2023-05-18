@@ -133,6 +133,6 @@ Start HASSOS Container and check if everything works:
 dmesg | grep cifs
 ```
 ```
-dmesg | grep nfs
+dmesg | grep mount
 ```
 If YES, then edit the Proxmox config file in **Step1** above to comment out the HA disk. Boot the HASSOS Container.
