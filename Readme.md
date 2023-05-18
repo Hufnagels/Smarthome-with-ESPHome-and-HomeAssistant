@@ -79,6 +79,37 @@ bkcmd=0
 
 ## Prerequisite
 
+
+### Visual schema
+
+### [Photodiode]() 
+
+4Pin Fotodiode Sensor Controller Module
+
+How the photodiode is connected to the ESP board of your choice.
+
+
+| **PHOTODIODE** | ESP32 | Wemos D1 / ESP8266|
+|:----------|:----------|:----------|
+| A0        | NOT USING | NOT USING |
+| DO | D13 (GPIO13) | D7 (GPIO13) |
+| VCC | 3V3 | 3V3 |
+| GND | GND | GND |
+
+
+### Status LED
+
+How the status LED is connected to the ESP board of your choice. For each measured pulse, the LED will briefly flash red and in case of no WiFi connection, the LED will continue to flash blue.
+
+|LED    | ESP32      | Wemos D1 / ESP8266 |
+|:----------|:----------|:----------|
+| RED   | D2 (GPIO2) | D4 (GPIO2) |
+| GREEN | D4 (GPIO4) | D2 (GPIO4) |
+| BLUE  | D5 (GPIO5) | D1 (GPIO5) |
+| GND   | GND        | GND        |
+
+
+
 ## Helpers
 ### ESPHome Default configs
 #### Board naming convention
@@ -351,6 +382,7 @@ The topics naming
               root["payload"]["measures"]["humidity"] = id(room_humidity).state;
               root["timestamp"] = id(homeassistant_time).now().timestamp;
 ```
+
 
 # Changing params
 ## Device name - change

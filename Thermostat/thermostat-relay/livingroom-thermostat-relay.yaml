@@ -1,11 +1,23 @@
-# wemos D1 mini Pro board
-# 64x48 OLED shield
-# 1ch Relay (5V)
-# 1 push button for manually ON/OFF 
-# Version: 0.3.1
-#   Single-point Thermostat Relay unit
-#   TODO:
-#     - RF for using wo HA
+# @file         livingroom-thermostat-relay.yaml
+# @author       
+# @description  Single-point Thermostat Relay unit
+# @version      0.3.1.
+# @section      Board 
+#   - wemos D1 mini Pro
+# @section      BOM
+#   - Display:
+#     64x48 OLED shield
+#   - Relay:
+#     1ch Relay (5V)
+#   - Buttons:
+#     1 push button for manually ON/OFF
+# @library
+#   - bme680 sensor bsec library
+# @include
+# @library
+# @description
+# @TODO
+#   - RF for using wo HA
 
 ######################################
 # SUBSTITUIONS SECTION
@@ -22,7 +34,7 @@ substitutions:
 
   unit_name: relay
   parent_device: "thermostat-central-1"
-  child_devices: "{heater_1_switch}"
+  child_devices: "{switch_heater_1}"
   controlled_device: heater
 
   <<: !include includes/base/.base.substitutions.yaml
@@ -45,17 +57,19 @@ esphome:
   # Board type
   <<: !include includes/boards/.board.wemos-d1-mini-pro.yaml
   project:
-    <<: !include includes/projects/livingroom-thermostat.yaml
+    <<: !include includes/projects/livingroom-thermostat/.versioning.livingroom-thermostat.yaml
   on_boot:
     priority: 200
     then:
-      - switch.turn_off: heater_1_switch
-      - switch.turn_on: ma_switch
-      - logger.log: "Heater Turned Off and Auto switch turned on after boot!"
+      - switch.turn_off: switch_heater_1
+      - switch.turn_on: switch_manual_auto
+      - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("on_boot", "Heater Turned Off and Auto switch turned on after boot!");
   on_shutdown:
     priority: 700
     then:
-      - switch.turn_off: heater_1_switch
+      - switch.turn_off: switch_heater_1
       # deepsleep
 
 ######################################
@@ -70,6 +84,9 @@ packages:
 ######################################
 <<: !include includes/base/.base.connection-settings.yaml
 
+logger:
+  level: INFO
+  
 ######################################
 # HA DATE-TYME SYNC SECTION
 ######################################
@@ -88,16 +105,19 @@ packages:
 ######################################
 mqtt:
   on_connect:
-    - switch.turn_off: heater_1_switch
+    - switch.turn_off: switch_heater_1
     - lambda: |- 
-        id(mqtt_connection_state) = true;
-        id(ma_switch).turn_off(); // AUTO MODE
-        id(auto_mode) = true;     // AUTO MODE
-    - logger.log: "${device_type} ${device_subtype} ${device_number} connected"
+        id(state_mqtt_connection) = true;
+        id(switch_manual_auto).turn_off(); // AUTO MODE
+        id(state_auto_mode) = true;     // AUTO MODE
+        ESP_LOGI("separator", "------------------------------------------------------");
+        ESP_LOGI("mqtt", "${device_type} ${device_subtype} ${device_number} connected to MQTT");
   #<<: !include includes/mqtt/.mqtt.default-on_disconnect.yaml
   on_disconnect:
-    - switch.turn_off: heater_1_switch
-    - logger.log: "${device_type} ${device_subtype} ${device_number} disconnected"
+    - switch.turn_off: switch_heater_1
+    - lambda: |-
+        ESP_LOGI("separator", "------------------------------------------------------");
+        ESP_LOGI("mqtt", "${device_type} ${device_subtype} ${device_number} disconnected from MQTT");
 
   # smarthome_test/Climate/Livingroom/Thermostat/command
   on_json_message:
@@ -106,22 +126,86 @@ mqtt:
       then:
         - lambda: |-
             if (x.containsKey("receiver") && x["receiver"] == "${device_name}") {
+              ESP_LOGI("separator", "------------------------------------------------------");
+              
               if (x["payload"]["command"] == "ON" ) {
-                id(auto_mode) = true;
-                id(heater_1_switch).turn_on();
-                id(ma_switch).turn_off(); // AUTO MODE
+                id(state_auto_mode) = true;
+                id(switch_heater_1).turn_on();
+                id(switch_manual_auto).turn_off(); // AUTO MODE
+                ESP_LOGI("mqtt",  "MQTT JSON Message: ON");
               }
               if (x["payload"]["command"] == "OFF" ) {
-                id(auto_mode) = true;
-                id(heater_1_switch).turn_off();
-                //id(ma_switch).turn_on();  // MANUAL MODE
+                id(state_auto_mode) = true;
+                id(switch_heater_1).turn_off();
+                //id(switch_manual_auto).turn_on();  // MANUAL MODE
+                ESP_LOGI("mqtt",  "MQTT JSON Message: OFF");
               }
               if (x["payload"]["command"] == "IDLE" ) {
-                id(auto_mode) = true;
-                id(heater_1_switch).turn_off();
-                id(ma_switch).turn_off();  // MANUAL MODE
+                id(state_auto_mode) = true;
+                id(switch_heater_1).turn_off();
+                id(switch_manual_auto).turn_off();  // MANUAL MODE
+                ESP_LOGI("mqtt",  "MQTT JSON Message: IDLE");
+              }
+              if (x["payload"]["command"] == "RESTART" ) {
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("MQTT","RESTART command received");
+                id(restart_switch).turn_on();
               }
             }
+
+######################################
+# GLOBALS SECTION
+######################################
+globals:
+  ######################################
+  # Check API connection status
+  ######################################
+  - id: state_api_connected           
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  ######################################
+  # Check MQTT connection status
+  ######################################
+  - id: state_mqtt_connection
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  ######################################
+  # AUTO / MANUAL MODE
+  # The "id: switch_heater_1" HA SWITCH or "id: heater_button" Push button can change MANUAL / AUTO state
+  # IN MANUAL mode send message to Central Unit to DISABLE Heater and AC button
+  # IN AUTO mode send message to Central Unit to ENABLE Heater and AC button
+  # TRUE : AUTO | FALSE : MANUAL
+  ######################################
+  - id: state_auto_mode   # AUTO | MANUAL
+    type: bool
+    restore_value: false
+    initial_value: 'true'
+  ######################################
+  # Check API connection status
+  ######################################
+  - id: set_temp_in
+    type: std::string
+    restore_value: false
+    initial_value: '"21.00"'
+
+######################################
+# INTERVAL SECTION
+######################################
+interval:
+  - interval: 10s
+    then:
+      - display.page.show_next: mini_oled
+      #- component.update: mini_oled
+
+######################################
+# I2C SECTION
+######################################
+i2c:
+  - id: i2cbus_ssd1306
+    sda: D2
+    scl: D1
 
 ######################################
 # FONT SECTION
@@ -134,34 +218,6 @@ font:
     id: roboto_regular_9
     size: 10
 
-######################################
-# GLOBALS SECTION
-######################################
-globals:
-  # AUTO / MANUAL MODE
-  # The "id: heater_1_switch" HA SWITCH or "id: heater_button" Push button can change MANUAL / AUTO state
-  # IN MANUAL mode send message to Central Unit to DISABLE Heater and AC button
-  # IN AUTO mode send message to Central Unit to ENABLE Heater and AC button
-  # TRUE : AUTO | FALSE : MANUAL
-  - id: auto_mode   # AUTO | MANUAL
-    type: bool
-    restore_value: false
-    initial_value: 'true'
-  - id: set_temp_in
-    type: std::string
-    restore_value: false
-    initial_value: '"21.00"'
-  - id: mqtt_connection_state
-    type: bool
-    restore_value: true
-    initial_value: 'false'
-
-######################################
-# I2C SECTION
-######################################
-i2c:
-  sda: D2
-  scl: D1
 
 ######################################
 # 0.96" DISPLAY SECTION
@@ -169,39 +225,50 @@ i2c:
 display:
   - platform: ssd1306_i2c
     model: "SSD1306 64x48"
+    i2c_id: i2cbus_ssd1306
     reset_pin: D0
     address: 0x3C
-    lambda: |-
-      // Manual/Auto state
-      it.print(0, 0, id(roboto_regular_9), id(auto_mode) ? "A":"M");
-      // Separator
-      it.line(12, 0, 12, 12);
-      // Heater state
-      it.print(18, 0, id(roboto_regular_9), id(heater_1_switch).state ? "H: +":"H: -");
-      // Separator
-      it.line(39, 0, 39, 12);
-      // MQTT state
-      it.print(45, 0, id(roboto_regular_9), id(mqtt_connection_state) ? "M: +":"M: -");
-      
-      //Outside temp
-      if (id(weather_temperature).has_state())
-      {
-        it.printf(2, 26, id(roboto_regular_9), "%.0f°", id(weather_temperature).state);
-      }
-      //Ambiente temp
-      if (id(bme680_temperature).has_state())
-      {
-        it.printf(15, 26, id(roboto_regular_9), "/%.0f°", id(bme680_temperature).state);
-      }
-      // Print time in HH:MM format
-      it.strftime(63, 26, id(roboto_regular_9), TextAlign::RIGHT, "%H:%M", id(homeassistant_time).now());
-      // Print date in YYYY.MM.DD format
-      it.strftime(63, 37, id(roboto_regular_9), TextAlign::RIGHT, "%Y.%m.%d", id(homeassistant_time).now());
+    id: mini_oled
+    pages:
+      - id: page1
+        lambda: |-
+          // LINE 1
+          // Manual/Auto state
+          it.print(0, 0, id(roboto_regular_9), id(state_auto_mode) ? "AUTO":"MANUAL");
+          // LINE 2
+          // MQTT state
+          it.print(0, 13, id(roboto_regular_9), id(state_mqtt_connection) ? "CONNECTED":"DISCONNECTED");
+          // LINE 3
+          // Heater state
+          it.print(0, 26, id(roboto_regular_9), id(switch_heater_1).state ? "HEATING":"IDLE");
+      - id: page2
+        lambda: |-
+          // LINE 1
+          //Outside temp
+          it.print(0, 0, id(roboto_regular_9), "Out:");
+          if (id(owm_weather_temperature).has_state()) {
+            it.printf(26, 0, id(roboto_regular_9), "%.0f°C", id(owm_weather_temperature).state);
+          }
+          // LINE 2
+          //Ambiente temp
+          it.print(0, 13, id(roboto_regular_9), "In:");
+          if (id(bme680_temperature).has_state()) {
+            it.printf(26, 13, id(roboto_regular_9), "%.0f°C", id(bme680_temperature).state);
+          }
+          // LINE 3
+          // Print time in HH:MM format
+          it.strftime(63, 26, id(roboto_regular_9), TextAlign::RIGHT, "%H:%M", id(homeassistant_time).now());
+          // LINE 4
+          // Print date in YYYY.MM.DD format
+          it.strftime(63, 37, id(roboto_regular_9), TextAlign::RIGHT, "%Y.%m.%d", id(homeassistant_time).now());
 
 ######################################
 # SWITCH SECTION
 ######################################
 switch:
+  - platform: restart
+    name: "Restart"
+    id: restart_switch
   ######################################
   # HA switch to turn ON/OFF heater
   # internal led
@@ -209,15 +276,16 @@ switch:
   - platform: gpio
     pin: GPIO00
     name: "Heater switch"
-    id: heater_1_switch
+    id: switch_heater_1
     inverted: true
     restore_mode: ALWAYS_OFF
     <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "heater_switch" } } # inline syntax
     on_turn_on:
-      - logger.log: "Heater Turned On by Control unit!"
       - lambda: |-
-            id(auto_mode) = true;
-            id(heater_1_switch).turn_on();
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("heater_switch", "Heater Turned On by Control unit!");
+          id(state_auto_mode) = true;
+          id(switch_heater_1).turn_on();
       - mqtt.publish_json:
             topic: ${topic_action_receiver}
             payload: |-
@@ -229,11 +297,12 @@ switch:
               root["trigger"] = "switch on_turn_on";
               root["timestamp"] = id(homeassistant_time).now().timestamp;
     on_turn_off:
-      - logger.log: "Heater Turned Off by Control unit!"
       - lambda: |-
-            id(auto_mode) = true;
-            id(heater_1_switch).turn_off();
-            id(ma_switch).turn_off();
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("heater_switch", "Heater Turned Off by Control unit!");
+            id(state_auto_mode) = true;
+            id(switch_heater_1).turn_off();
+            id(switch_manual_auto).turn_off();
       - mqtt.publish_json:
             topic: ${topic_action_receiver}
             payload: !lambda |-
@@ -241,7 +310,7 @@ switch:
               root["receiver"] = "${device_type}_${device_subtype}_${device_number}";
               root["room"] = "${device_location}";
               root["floor"] = "${device_floor}";
-              root["payload"]["action"] = id(heater_1_switch).state ? "ON" : "OFF";
+              root["payload"]["action"] = id(switch_heater_1).state ? "ON" : "OFF";
               root["trigger"] = "switch on_turn_off";
               root["timestamp"] = id(homeassistant_time).now().timestamp;
   ######################################
@@ -250,11 +319,11 @@ switch:
   - platform: gpio
     pin: D7
     name: "Manual/Auto control LED"
-    id: ma_switch
+    id: switch_manual_auto
     <<: !include { file: includes/mqtt/.mqtt.components-topic-with-command.yaml, vars: { component_type: "switch", component_id: "manual_auto_switch" } } # inline syntax
     on_turn_on: # MANUAL MODE
-      - switch.turn_on: heater_1_switch
-      - lambda: id(auto_mode) = false;
+      - switch.turn_on: switch_heater_1
+      - lambda: id(state_auto_mode) = false;
       - mqtt.publish_json:
           topic: ${topic_command}
           payload: |-
@@ -267,8 +336,8 @@ switch:
             root["trigger"] = "switch on_turn_on";
             root["timestamp"] = id(homeassistant_time).now().timestamp;
     on_turn_off: # AUTO MODE
-      - switch.turn_off: heater_1_switch
-      - lambda: id(auto_mode) = true;
+      - switch.turn_off: switch_heater_1
+      - lambda: id(state_auto_mode) = true;
       - mqtt.publish_json:
           topic: ${topic_command}
           payload: |-
@@ -285,12 +354,17 @@ switch:
 # SENSOR SECTION
 ######################################
 sensor:
-  # Weather forecast temp
+  # OpenWeatherMap sensor.openweathermap_temperature
   - platform: homeassistant
-    id: weather_temperature
-    entity_id: ${weather_forecast_entity}
-    attribute: temperature
+    name: "OpenWeatherMap Temperature"
+    entity_id: sensor.openweathermap_temperature
+    id: owm_weather_temperature
     internal: true
+    on_value:
+      then:
+        - lambda: |-
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("OpenWeatherMap", "The Outtemp value is temperature=%f", id(owm_weather_temperature).state);
   # Control unit BME680 temp
   - platform: homeassistant
     id: bme680_temperature
@@ -323,32 +397,10 @@ binary_sensor:
     filters:
       - delayed_on_off: 100ms
     on_press:
-      - switch.toggle: ma_switch
-      - logger.log:
-                format: "AUTO MODE %s"
-                args: [ 'id(auto_mode)?"True":"False"' ]
-
-    #on_press:
-    #  then:
-    #    - lambda:
-    #        // check statuses
-    #        id(heater_1_switch).turn_on();
-    #        id(ma_switch).turn_on();
-    #    - mqtt.publish_json:
-    #        topic: ${topic_action_receiver}
-    #        payload: !lambda |-
-    #          root["sender"] = "${device_type}_${device_subtype}_${device_number}";
-    #          root["receiver"] = "${device_type}_${device_subtype}_${device_number}";
-    #          root["room"] = "${device_location}";
-    #          root["floor"] = "${device_floor}";
-    #          root["payload"]["action"] = id(heater_1_switch).state ? "ON" : "OFF";
-    #          root["trigger"] = "binary_sensor on_press";
-    #          root["timestamp"] = id(homeassistant_time).now().timestamp;
-    #    #- mqtt.publish:
-    #    #    topic: ${topic_state}
-    #    #    payload: !lambda |-
-    #    #      return id(heater_1_switch).state ? "ON" : "OFF";
-    # Optional variables:
+      - switch.toggle: switch_manual_auto
+      - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("heater_button", "AUTO MODE %s", id(state_auto_mode)?"True":"False");
 
 ######################################
 # TEXT SENSOR SECTION

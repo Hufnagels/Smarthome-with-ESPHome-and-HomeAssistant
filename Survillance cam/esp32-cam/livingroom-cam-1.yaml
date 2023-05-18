@@ -1,5 +1,14 @@
-# esp32-cam AI-Thinker board
-# enc: ZChn4u6GJ/rwS5+W/AlfZ82y4qsTcbfpvoy8dGP151k=
+# @file         livingroom-cam-2.yaml
+# @author   
+# @description  ESP32 CAM modul
+# @version      0.2.
+# @section      Board 
+#   - esp32-cam AI-Thinker board
+# @section      BOM
+# @include  
+# @library
+# @description
+# @TODO
 
 ######################################
 # SUBSTITUIONS SECTION
@@ -50,6 +59,8 @@ packages:
 ######################################
 <<: !include includes/base/.base.connection-settings.yaml
 
+logger:
+  level: INFO
 ######################################
 # HA DATE-TYME SYNC SECTION
 ######################################
@@ -68,9 +79,27 @@ packages:
 ######################################
 mqtt:
   on_connect:
-    - logger.log: "${device_type} ${device_subtype} ${device_number} connected"
+    - lambda: |-
+        ESP_LOGI("separator", "------------------------------------------------------");
+        ESP_LOGI("mqtt", "${device_type} ${device_subtype} ${device_number} connected to MQTT");
   on_disconnect:
-    - logger.log: "${device_type} ${device_subtype} ${device_number} disconnected"
+    - lambda: |-
+        ESP_LOGI("separator", "------------------------------------------------------");
+        ESP_LOGI("mqtt", "${device_type} ${device_subtype} ${device_number} disconnected from MQTT");
+  # smarthome_test/Climate/Livingroom/Thermostat/command
+  on_json_message:
+    # Central Unit send command for turning ON | OFF Heater
+    - topic: ${topic_command}
+      then:
+        - lambda: |-
+            if (x.containsKey("receiver") && x["receiver"] == "${device_name}") {
+              if (x["payload"]["command"] == "RESTART" ) {
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("MQTT","RESTART command received");
+                id(restart_switch).turn_on();
+              }
+              
+            }
 
 ######################################
 # ESP32 CAM SECTION
@@ -139,7 +168,10 @@ sensor:
 ######################################
 # SWITCH SECTION
 ######################################
-
+switch:
+  - platform: restart
+    name: "Restart"
+    id: restart_switch
 ######################################
 # TEXT SENSOR SECTION
 ######################################

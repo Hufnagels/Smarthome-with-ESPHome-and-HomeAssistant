@@ -1,18 +1,27 @@
-# nodemcu-32s v1.1 board
-# bme680 sensor bsec library
-# Nextion NX3224T028 Basic
-#   320 x 240 Resolution
-#   RGB 65K true to life colours
-#   TFT screen with integrated resistive touch panel 
-#   4 pin TTL serial interface
-#   4M Flash memory for User Application Code and Data 
-#   On board micro-SD card slot for firmware upgradation
-# Version: 0.3.1
-#   Single-point Thermostat with a Relay unit
-#   TODO:
-#     - FRAM for storing latest settings
-#     - ds1307 Time Source
-#     - RF for using wo HA
+# @file         livingroom-thermostat.yaml
+# @author       
+# @description  Single-point Thermostat unit
+# @version      0.3.1.
+# @section      Board 
+#   - Wemos D1 mini board
+# @section      BOM
+#   - Display:
+#     Nextion NX3224T028 Basic
+#   - Sensors:
+#     bme680
+#   - FRAM
+#     Adafruit I2C Non-Volatile Ferroelectric Ram Breakout - 256Kbit / 32KByte for 3V or 5V Power and Logic or FRAM
+#     https://github.com/adafruit/Fritzing-Library/tree/master/parts
+# @library
+#   - bme680 sensor bsec library
+# @include
+# @library
+#   - "Wire"
+#   - https://github.com/RobTillaart/FRAM_I2C.git#master
+# @description
+# @TODO
+#   - ds1307 Time Source
+#   - RF for using wo HA
 
 ######################################
 # SUBSTITUIONS SECTION
@@ -21,7 +30,7 @@ substitutions:
   device_type: Thermostat
   device_subtype: Central
   device_number: "1"
-  device_name: thermostat-central-${device_number}
+  device_name: "thermostat-wemosd1"
   device_group: Climate
 
   device_location: Livingroom
@@ -55,6 +64,9 @@ substitutions:
   ds_sleep_duration: 5min     # ~5 min
   ds_run_duration: 20s
 
+  # Blue LED
+  blue_led_pin: D4
+
 ######################################
 # ESPHOME SECTION
 ######################################
@@ -62,20 +74,25 @@ esphome:
   # Project/Board definition
   <<: !include includes/base/.base.esphome-definition.yaml
   # Board type
-  <<: !include includes/boards/.board.nodemcu-32s.yaml
+  <<: !include includes/boards/.board.wemos-d1-mini.yaml
   project:
-    <<: !include includes/projects/livingroom-thermostat.yaml
+    <<: !include includes/projects/livingroom-thermostat/.versioning.livingroom-thermostat.yaml
+  includes:
+    - "includes/projects/livingroom-thermostat/i2cfram.h"
+  libraries:
+    - "Wire"
+    #The develop isn't neccesary if version 0.4.3 is released, as of know it is stil in development stage.
+    - https://github.com/RobTillaart/FRAM_I2C.git#master
   on_boot:
     priority: -100
     then:
       - switch.turn_on: OnOff_template_switch
       - switch.turn_off: heater_template_switch
       - switch.turn_off: ac_template_switch
-      - switch.turn_off: internal_led
+      #- switch.turn_off: internal_led
+      - output.turn_off: blue_led
       - lambda: |-
-          id(unit_state) = true;
-      
-
+          id(state_unit_on) = true;
   on_shutdown:
     priority: 700
     then:
@@ -91,6 +108,7 @@ esphome:
 packages:
   mqtt: !include includes/mqtt/.mqtt.base-params.yaml
   text_sensor: !include includes/components/.components.text_sensor.wifi-connection-data.yaml
+  #wifi: !include includes/projects/livingroom-thermostat/.custom-ip.wemos-d1-mini.yaml
   #time: !include includes/components/.components.time.ha-time-sync.yaml
 
 ######################################
@@ -98,6 +116,10 @@ packages:
 ######################################
 <<: !include includes/base/.base.connection-settings.yaml
 
+logger:
+  level: DEBUG
+  baud_rate: 0
+  
 ######################################
 # HA DATE-TYME SYNC SECTION
 ######################################
@@ -116,8 +138,9 @@ packages:
 ######################################
 mqtt:
   on_connect:
-    - logger.log: "${device_type} ${device_subtype} ${device_number} connected to MQTT"
     - lambda: |-
+        ESP_LOGI("separator", "------------------------------------------------------");
+        ESP_LOGI("MQTT","${device_type} ${device_subtype} ${device_number} connected to MQTT");
         id(heater_template_switch).turn_off();
         id(ac_template_switch).turn_off();
     - mqtt.publish_json:
@@ -132,7 +155,9 @@ mqtt:
             root["timestamp"] = id(homeassistant_time).now().timestamp;
 
   on_disconnect:
-    - logger.log: "${device_type} ${device_subtype} ${device_number} disconnected"
+    - lambda: |-
+        ESP_LOGI("separator", "------------------------------------------------------");
+        ESP_LOGI("MQTT","${device_type} ${device_subtype} ${device_number} disconnected from MQTT");
 
   # smarthome_test/Climate/Livingroom/Thermostat/command
   on_json_message:
@@ -143,58 +168,89 @@ mqtt:
             if (x.containsKey("receiver") && x["receiver"] == "${device_name}") {
               if (x["payload"]["command"] == "ON" ) {
                 // MANUAL MODE SELECTED
-                id(auto_mode_state) = false;
+                id(state_auto_mode) = false;
                 // TODO: CLIMATE CARD
 
                 // Turn Heater ON, 
                 id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_on_pic));
                 id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_on_pic));
-                id(internal_led).turn_on();
-                id(heater_state) = true;
+                //id(internal_led).turn_on();
+                id(blue_led).turn_on();
+                id(state_heater) = true;
                 id(${display_id}).send_command_printf("tsw hvac,0");
                 id(${display_id}).send_command_printf("tsw heater,0");
               }
               if (x["payload"]["command"] == "OFF" ) {
                 // Turn Heater OFF
-                id(auto_mode_state) = true;
+                id(state_auto_mode) = true;
                 // TODO: CLIMATE CARD
 
                 id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_off_pic));
                 id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_off_pic));
-                id(internal_led).turn_off();
-                id(heater_state) = false;
+                //id(internal_led).turn_off();
+                id(blue_led).turn_off();
+                id(state_heater) = false;
                 id(${display_id}).send_command_printf("tsw hvac,1");
                 id(${display_id}).send_command_printf("tsw heater,1");
               }
-              if (x["payload"]["command"] == "OPEN" ) {
-                // Turn Heater OFF
-                id(auto_mode_state) = true;
-                // TODO: CLIMATE CARD
-
-                id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_off_pic));
-                id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_off_pic));
-                id(internal_led).turn_off();
-                id(heater_state) = false;
-                id(${display_id}).send_command_printf("tsw hvac,1");
-                id(${display_id}).send_command_printf("tsw heater,1");
+              if (x["payload"]["command"] == "OPENED" ) {
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("MQTT","OPENED command received");
+                id(state_window_open) = true;
+                id(blinkLED).execute();
+                id(CLIMATE_MODE_SET)->execute("OFF");
+              }
+              if (x["payload"]["command"] == "CLOSED" ) {
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("MQTT","CLOSED command received");
+                id(state_window_open) = false;
+                //id(CLIMATE_MODE_SET)->execute("OFF");
               }
             }
+
+######################################
+# PIN SECTION
+######################################
+<<: !include includes/projects/livingroom-thermostat/.pins.livingroom-thermostat.board-wemos-d1-mini.yaml
+
+######################################
+# CUSTOM COMPONENT SECTION
+# I2C Fram module
+######################################
+#Enabeling the I2CFram module
+custom_component:
+  components:
+    - id: my_fram
+  lambda: |-
+      auto my_fram = new MyFram(0x50);
+      App.register_component(my_fram);
+      return {my_fram};
 
 ######################################
 # GLOBALS SECTION
 ######################################
 globals:
+  ######################################
   # Check API connection status
-  - id: api_connected_status           
+  ######################################
+  - id: state_api_connected           
     type: bool
     restore_value: false
     initial_value: 'false'
   ######################################
   # Relay mode check --> True : Auto mode | False: Manual mode
-  - id: auto_mode_state           
+  ######################################
+  - id: state_auto_mode           
     type: bool
     restore_value: false
     initial_value: 'true'
+  ######################################
+  # Window is OPENED|CLOSED
+  ######################################
+  - id: state_window_open           
+    type: bool
+    restore_value: false
+    initial_value: 'false'
   ###################################### 
   # Temp variables
   # Dual-point climate
@@ -212,6 +268,8 @@ globals:
     restore_value: no
     initial_value: '{20.00, 23.00}'   # Winter, Summer --> Cooling needed
   ###################################### 
+  # Temp variables
+  # Single-point climate
   # Settemp, Settemp step, Outtemp
   ###################################### 
   - id: settemp_value
@@ -229,25 +287,26 @@ globals:
   ######################################
   # Heater state to avoid run heater and AC on same time
   ######################################
-  - id: heater_state
+  - id: state_heater
     type: bool
     restore_value: false
     initial_value: 'false'
   ######################################
   # AC state to avoid run heater and AC on same time
   ######################################
-  - id: ac_state
+  - id: state_ac
     type: bool
     restore_value: false
     initial_value: 'false'
   ######################################
   # Unit state: ON/OFF
   ######################################
-  - id: unit_state
+  - id: state_unit_on
     type: bool
     restore_value: false
     initial_value: 'false'
   ######################################
+  # NEXTION
   # Image numbers from Nextion (Must be checked)
   ######################################
   # Heater (heater)
@@ -279,6 +338,7 @@ globals:
     restore_value: false
   ######################################
   # NEXTION
+  # connection check, brightness
   ######################################
   # Connection status
   - id: nextion_isConnected           
@@ -324,6 +384,20 @@ globals:
     type: int
     initial_value: '0'   # NONE | HOME | SLEEP | AWAY
     restore_value: true
+  ######################################
+  # OpenWeatherMap weather condition
+  # Sunny, Clear sky....
+  ######################################
+  - id: owm_weather_conditon_today
+    type: std::string
+    initial_value: ""
+    restore_value: no
+  ######################################
+  # Climate presets are initialised? 0: false | 1: true
+  ######################################
+  - id: state_presets_init           
+    type: int
+    restore_value: false
 
 ######################################
 # SUN SECTION - NEXTION BRIGHTNESS SECTION
@@ -338,23 +412,57 @@ sun:
     - then:
       - lambda: |-
           id(brightness)=.8;
-      - logger.log: Good morning!
+          ESP_LOGI("sun", "Good morning!");
   # DARK
   on_sunset:
     - then:
       - lambda: |-
           id(brightness)=.2;
-      - logger.log: Good evening!
+          ESP_LOGI("sun", "Good evening!");
 
 ######################################
 # SCRIPT SECTION
 ######################################
 script:
+  # Load data from FRAM
+  - id: on_boot
+    then:
+      - if:
+          condition:
+            - lambda: 'return (int)readfromfram(0x01) == 1;'
+          then:
+            - lambda: |-
+                readcounters();
+      - if:
+          condition:
+            - lambda: 'return (int)readfromfram(0x01) == 0;'
+          then:
+            - lambda: |-
+                writetofram(0x01,1);              // state_presets_init
+                writetofram(0x02,1);              // settemp_value
+                writetofram(0x03,1);              // CLIMATE_PRESET_MODE_INT
+                readcounters();
+
+  - id: blinkLED
+    mode: queued
+    then:
+      - while:
+          condition:
+            - lambda: "return id(state_window_open) == true;"
+          then:
+            - lambda: |-
+                ESP_LOGI("blink_led", "Window OPENED message");
+            - delay: 100ms
+            - output.turn_on: blue_led
+            - delay: 100ms
+            - output.turn_off: blue_led
+            - delay: 100ms
+  
   - id: connection_check
     then:
       if:
         condition:
-          - lambda: 'return id(api_connected_status) == true;'
+          - lambda: 'return id(state_api_connected) == true;'
         then:
           - lambda: |-
               ESP_LOGI("script:connection_check", "connection_check");
@@ -362,16 +470,21 @@ script:
               id(${display_id}).set_component_value("page0.wifi_state", 1);
               id(${display_id}).send_command_printf("tsw wifi_state,0");
 
-  
+  ######################################
+  # CHECK TARGET TEMP AND SETTEMP 
+  ######################################
   - id: TEMP_CONDITION_CHECK
     then:
       - if:
           condition:
             and:
-              - lambda: 'return id(unit_state) == true;'
-              - lambda: 'return id(auto_mode_state) == true;'
+              - lambda: 'return id(state_unit_on) == true;'
+              - lambda: 'return id(state_auto_mode) == true;'
+              - lambda: 'return id(state_window_open) == false;'
+              
           then:
             - lambda: |-
+                ESP_LOGI("separator", "------------------------------------------------------");
                 ESP_LOGI("script:TEMP_CONDITION_CHECK", "AUTO MODE TRUE");
                 if( id(room_temp).state > id(settemp_value) ) {
                   // Turn OFF Heater
@@ -386,13 +499,32 @@ script:
                   //   ts_CLIMATE_ACTION
                   //id(heater_template_switch).turn_on();
                 }
+      # MANUAL MODE
       - if:
           condition:
-            - lambda: 'return id(auto_mode_state) == false;'
+            and:
+              - lambda: 'return id(state_unit_on) == true;'
+              - lambda: 'return id(state_auto_mode) == false;'
+              - lambda: 'return id(state_window_open) == false;'
+              
           then:
             - lambda: |-
                 //id(CLIMATE_MODE_SET)->execute("HEAT");
+                ESP_LOGI("separator", "------------------------------------------------------");
                 ESP_LOGI("script:TEMP_CONDITION_CHECK", "AUTO MODE FALSE: MANUAL MODE SELECTED");
+      # Window OPENED
+      - if:
+          condition:
+            - lambda: 'return id(state_unit_on) == true;'
+            - lambda: 'return id(state_auto_mode) == true;'
+            - lambda: 'return id(state_window_open) == true;'
+            
+          then:
+            - lambda: |-
+                //id(CLIMATE_MODE_SET)->execute("HEAT");
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("script:TEMP_CONDITION_CHECK", "WINDOW IS OPEN");
+                id(CLIMATE_MODE_SET)->execute("OFF");
 
   ######################################
   # SETTEMP GET/SET
@@ -405,9 +537,6 @@ script:
     then:
       - lambda: |-
           ESP_LOGI("script:SETTEMP_GET", "SETTEMP_GET Script is running!");
-          //id(settemp_value) = stof(settemp);
-          //id(settemp_value) = atof(settemp);
-          //id(settemp_value) = settemp;
           id(${display_id}).set_component_text_printf("page0.settemp", "%.1f", id(settemp_value));
   
   # SETTEMP SET
@@ -417,15 +546,22 @@ script:
     #parameters:
     #  settemp: float
     then:
-      - lambda: |-
-          ESP_LOGI("script:SETTEMP_SET", "SETTEMP_SET Script is running!");
-          //id(settemp_value) = settemp;
-          id(${display_id}).set_component_text_printf("page0.settemp", "%.1f", id(settemp_value));
-          auto call = id(thermostat${device_number}).make_call();
-          call.set_target_temperature(id(settemp_value)); // id(thermostat${device_number}).target_temperature - id(settemp_target_temp_step)
-          call.perform();
-      - script.execute:
-          id: TEMP_CONDITION_CHECK
+      -  if:
+          condition:
+              - lambda: 'return id(state_unit_on) == true;'
+              - lambda: 'return id(state_auto_mode) == true;'
+              - lambda: 'return id(state_window_open) == false;'
+          then:
+            - lambda: |-
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("script:SETTEMP_SET", "SETTEMP_SET Script is running!");
+                //id(settemp_value) = settemp;
+                id(${display_id}).set_component_text_printf("page0.settemp", "%.1f", id(settemp_value));
+                auto call = id(thermostat${device_number}).make_call();
+                call.set_target_temperature(id(settemp_value)); // id(thermostat${device_number}).target_temperature - id(settemp_target_temp_step)
+                call.perform();
+            - script.execute:
+                id: TEMP_CONDITION_CHECK
   
   ######################################
   # CLIMATE ATTRIBUTES GET
@@ -437,33 +573,39 @@ script:
   - id: CLIMATE_ATTRIBUTES_GET
     then:
       - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
           ESP_LOGI("script:CLIMATE_ATTRIBUTES_GET", "CLIMATE_ATTRIBUTES_GET Script is running!");
           id(CLIMATE_PRESET_MODE_INT) = id(thermostat${device_number}).preset.value();
           id(CLIMATE_MODE) = id(thermostat${device_number}).mode;
           id(CLIMATE_ACTION) = id(thermostat${device_number}).action;
           
+          // set_component_font_color
+          // 52758 page bg
+          // 12645 dark braun
+          // 65535 white
           switch(id(CLIMATE_PRESET_MODE_INT)) {
             case 1:   // HOME
               id(CLIMATE_PRESET_MODE) = "HOME";
-              id(${display_id}).set_component_font_color("page0.t0", 12645);
-              id(${display_id}).set_component_font_color("page0.t1", 65535);
-              id(${display_id}).set_component_font_color("page0.t2", 65535);
+              id(${display_id}).set_component_background_color("page0.t0", 12645);
+              id(${display_id}).set_component_background_color("page0.t1", 52758);
+              id(${display_id}).set_component_background_color("page0.t2", 52758);
               break;
             case 6:   // SLEEP
-              id(CLIMATE_PRESET_MODE) = "SLEEP";
-              id(${display_id}).set_component_font_color("page0.t0", 65535);
-              id(${display_id}).set_component_font_color("page0.t1", 12645);
-              id(${display_id}).set_component_font_color("page0.t2", 65535);
+              id(CLIMATE_PRESET_MODE) = "SLEEP"; 
+              id(${display_id}).set_component_background_color("page0.t0", 52758);
+              id(${display_id}).set_component_background_color("page0.t1", 12645);
+              id(${display_id}).set_component_background_color("page0.t2", 52758);
               break;
             case 2:   // AWAY
               id(CLIMATE_PRESET_MODE) = "AWAY";
-              id(${display_id}).set_component_font_color("page0.t0", 65535);
-              id(${display_id}).set_component_font_color("page0.t1", 65535);
-              id(${display_id}).set_component_font_color("page0.t2", 12645);
+              id(${display_id}).set_component_background_color("page0.t0", 52758);
+              id(${display_id}).set_component_background_color("page0.t1", 52758);
+              id(${display_id}).set_component_background_color("page0.t2", 12645);
               break;
             default:   // NONE
               id(CLIMATE_PRESET_MODE) = "HOME";
               id(CLIMATE_PRESET_MODE_INT) = 1;
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("script:CLIMATE_ATTRIBUTES_GET", "CLIMATE_PRESET_SET Script is invoked!");
               id(CLIMATE_PRESET_SET)->execute("HOME");
               break;
@@ -490,6 +632,7 @@ script:
       preset_value: string
     then:
       - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
           ESP_LOGI("script:CLIMATE_PRESET_SET", "CLIMATE_PRESET_SET Script is running!");
           id(CLIMATE_PRESET_MODE) = preset_value;
           auto call = id(thermostat${device_number}).make_call();
@@ -506,6 +649,7 @@ script:
       mode_value: string
     then:
       - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
           ESP_LOGI("script:CLIMATE_MODE_SET", "CLIMATE_MODE_SET Script is running!");
           auto call = id(thermostat${device_number}).make_call();
           call.set_mode(mode_value);
@@ -527,6 +671,7 @@ script:
       action_value: string
     then:
       - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
           ESP_LOGI("script:CLIMATE_ACTION_SET", "CLIMATE_ACTION_SET Script is running!");
 
 ######################################
@@ -537,7 +682,8 @@ interval:
   - interval: 60s
     then:
       - lambda: |-
-          ESP_LOGI("interval:SUN_CHECK", "SUN_CHECK interval Script is running!");
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("interval_SUN_CHECK", "SUN_CHECK interval Script is running!");
           auto sunset = id(sun_sun).sunset(-0.833);
           auto sunrise = id(sun_sun).sunrise(-0.833);
           auto time = id(homeassistant_time).now();
@@ -555,9 +701,9 @@ interval:
             } else {
               id(brightness) = 0.2;
             }
+            ESP_LOGI("separator", "------------------------------------------------------");
             ESP_LOGI("sun_shift", "Brightness      %f", id(brightness) );
           }
-      - logger.log: "Interval 60s Sunrise - Sunset check"
 
   # Check temperature and climate mode
   - interval: 30s
@@ -565,11 +711,14 @@ interval:
       - if:
           condition:
             and:
+              - lambda: 'return id(state_unit_on) == true;'
+              - lambda: 'return id(state_auto_mode) == true;'
+              - lambda: 'return id(state_window_open) == false;'
               - lambda: 'return id(nextion_isConnected) == true;'
-              - lambda: 'return id(unit_state) == true;'
               - lambda: 'return !isnan(id(room_temp).state);'
           then:
             - lambda: |-
+                ESP_LOGI("separator", "------------------------------------------------------");
                 ESP_LOGI("interval:CLIMATE_ATTRIBUTES", "CLIMATE_ATTRIBUTES interval Script is running!");
                 ESP_LOGI("interval:climate attributes", "CLIMATE HVAC MODE      %i", id(CLIMATE_MODE) );
                 ESP_LOGI("interval:climate attributes", "CLIMATE HVAC ACTION    %i", id(CLIMATE_ACTION) );
@@ -588,18 +737,11 @@ interval:
           else:
             - switch.turn_off: heater_template_switch
             - switch.turn_off: ac_template_switch
-            - switch.turn_off: internal_led
-      - logger.log: "Interval 30s Temperature check"
-
-######################################
-# NEXTION UART SECTION
-######################################
-uart:
-  id: uart_2
-  rx_pin: GPIO16
-  tx_pin: GPIO17
-  baud_rate: 9600
-  #debug:
+            #- switch.turn_off: internal_led
+            - output.turn_off: blue_led
+      - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("interval_30s", "Interval 30s Temperature check");
 
 ######################################
 # NEXTION DISPLAY SECTION
@@ -607,7 +749,7 @@ uart:
 display:
   - platform: nextion
     id: ${display_id}
-    uart_id: uart_2
+    uart_id: uartbus_nextion
     update_interval: 30ms
     on_setup:
       - if:
@@ -655,18 +797,11 @@ display:
       it.set_backlight_brightness(id(brightness));
 
 ######################################
-# I2C SECTION
-######################################
-i2c:
-  sda: 21 # SCK - P21
-  scl: 22 # SDI - P22
-  scan: true
-  id: bus_a
-
-######################################
 # BME680 SECTION
 ######################################
 bme680_bsec:
+  id: bme680_internal
+  i2c_id: i2cbus_bme680
   address: 0x77
   temperature_offset: 1
   iaq_mode: static
@@ -687,18 +822,19 @@ binary_sensor:
     component_id: 8
     id: heater
     name: Heater state
-    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_heater_state" } } # inline syntax
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_state_heater" } } # inline syntax
     on_release:
       # TURN HEATER OFF
       - if:
           condition:
             and:
-              #- lambda: 'return id(auto_mode_state);'
-              - lambda: 'return id(ac_state) == false;'
-              - lambda: 'return id(heater_state) == true;'
+              #- lambda: 'return id(state_auto_mode);'
+              - lambda: 'return id(state_ac) == false;'
+              - lambda: 'return id(state_heater) == true;'
           then:
-            - logger.log: "Heater is on, AC is off and heater should turned off"
             - lambda: |-
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("nextion","Heater is on, AC is off and heater should turned off");
                 // Turn OFF Heater
                 //auto call = id(thermostat${device_number}).make_call();
                 //call.set_mode("HEAT");
@@ -709,12 +845,13 @@ binary_sensor:
       - if:
           condition:
             and:
-              #- lambda: 'return id(auto_mode_state);'
-              - lambda: 'return id(ac_state) == false;'
-              - lambda: 'return id(heater_state) == false;'
+              #- lambda: 'return id(state_auto_mode);'
+              - lambda: 'return id(state_ac) == false;'
+              - lambda: 'return id(state_heater) == false;'
           then:
-            - logger.log: "Heater is off, AC is off and heater should turned on"
             - lambda: |-
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("nextion", "Heater is off, AC is off and heater should turned on");
                 // Turn ON Heater
                 //auto call = id(thermostat${device_number}).make_call();
                 //call.set_mode("OFF");
@@ -735,36 +872,40 @@ binary_sensor:
     component_id: 9
     id: hvac
     name: AC state
-    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_ac_state" } } # inline syntax
+    <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "binary_sensor", component_id: "nextion_state_ac" } } # inline syntax
     #on_press:
     #  - wait_until:
     #      condition:
-    #        - lambda: 'return id(heater_state) == false;'
+    #        - lambda: 'return id(state_heater) == false;'
     on_release:
       if:
         condition:
           and:
-            #- lambda: 'return id(auto_mode_state) == true;'
-            - lambda: 'return id(heater_state) == false;'
-            - lambda: 'return id(ac_state) == true;'
+            #- lambda: 'return id(state_auto_mode) == true;'
+            - lambda: 'return id(state_heater) == false;'
+            - lambda: 'return id(state_ac) == true;'
             # ac check??
         then:
-          - logger.log: "AC is on, should turned off"
           - lambda: |-
               // Turn AC OFF
+              ESP_LOGI("separator", "------------------------------------------------------");
+              ESP_LOGI("nextion","AC is on, should turned off");
               id(${display_id}).send_command_printf("page0.hvac.pic=%d", id(ac_off_pic));
               id(${display_id}).send_command_printf("page0.hvac.pic2=%d", id(ac_off_pic));
-              id(internal_led).turn_off();
-              id(ac_state) = false;
+              //id(internal_led).turn_off();
+              id(blue_led).turn_off();
+              id(state_ac) = false;
 
         else:
-          - logger.log: "hvac is off, should turned on"
           - lambda: |-
               // Turn AC ON
+              ESP_LOGI("separator", "------------------------------------------------------");
+              ESP_LOGI("nextion","hvac is off, should turned on");
               id(${display_id}).send_command_printf("page0.hvac.pic=%d", id(ac_on_pic));
               id(${display_id}).send_command_printf("page0.hvac.pic2=%d", id(ac_on_pic));
-              id(internal_led).turn_on();
-              id(ac_state) = true;
+              //id(internal_led).turn_on();
+              id(blue_led).turn_on();
+              id(state_ac) = true;
    
   # UP BUTTON
   - platform: nextion
@@ -777,15 +918,18 @@ binary_sensor:
     on_press:
       then:
         - lambda: |-
-            ESP_LOGI("main", "UP pressed");
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("nextion", "UP pressed");
     on_release:
       then:
-        - logger.log: "Up released"
+        - lambda: |-
+            ESP_LOGI("nextion","Up released");
         - if:
             condition:
               and:
-                - lambda: 'return id(unit_state) == true;'
-                - lambda: 'return id(auto_mode_state) == true;'
+                - lambda: 'return id(state_unit_on) == true;'
+                - lambda: 'return id(state_auto_mode) == true;'
+                - lambda: 'return id(state_window_open) == false;'
             then:
               - lambda: |-
                   id(settemp_value) = id(settemp_value) + id(settemp_target_temp_step);
@@ -806,15 +950,19 @@ binary_sensor:
     on_press:
       then:
         - lambda: |-
-            ESP_LOGI("main", "Down pressed");
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("nextion", "Down pressed");
     on_release:
       then:
-        - logger.log: "Down released"
+        - lambda: |-
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("nextion","Down released");
         - if:
             condition:
               and:
-                - lambda: 'return id(unit_state) == true;'
-                - lambda: 'return id(auto_mode_state) == true;'
+                - lambda: 'return id(state_unit_on) == true;'
+                - lambda: 'return id(state_auto_mode) == true;'
+                - lambda: 'return id(state_window_open) == false;'
             then:
               - lambda: |-
                   id(settemp_value) = id(settemp_value) - id(settemp_target_temp_step);
@@ -831,6 +979,7 @@ sensor:
   # BME680 SENSOR SECTION
   ######################################
   - platform: bme680_bsec
+    bme680_bsec_id: bme680_internal
     temperature:
       name: "Temperature"
       id: room_temp
@@ -843,11 +992,13 @@ sensor:
         - above: 21.0
           then:
             - lambda: |-
-                ESP_LOGI("bme680_bsec", "The Temperture value is above 21. temperature=%.2f", id(room_temp).state);
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("bme680_bsec_temp", "The Temperture value is above 21. temperature=%.2f", id(room_temp).state);
         - below: 21.0
           then:
             - lambda: |-
-                ESP_LOGI("bme680_bsec", "The Temperture value is below 21. temperature=%.2f", id(room_temp).state);
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("bme680_bsec_temp", "The Temperture value is below 21. temperature=%.2f", id(room_temp).state);
       on_value:
         - mqtt.publish:
             topic: "Livingroom/Thermostat/${device_name}/Temperature"
@@ -856,7 +1007,8 @@ sensor:
               sprintf(buf,"wether3,location=Budapest temperature=%.2f", id(room_temp).state);
               return ((std::string) buf).c_str();
         - lambda: |-
-                ESP_LOGI("bme680_bsec", "The OpenWeatherMap reported value is temperature=%.2f", id(owm_weather_temperature).state);
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("bme680_bsec_temp", "The OpenWeatherMap reported value is temperature=%.2f", id(owm_weather_temperature).state);
       
     pressure:
       name: "Pressure"
@@ -867,7 +1019,8 @@ sensor:
       <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_pressure" } } # inline syntax
       on_value:
         - lambda: |-
-                ESP_LOGI("bme680_bsec", "The Pressure value is pressure=%.4f", id(room_pressure).state);
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("bme680_bsec_pressure", "The Pressure value is pressure=%.4f", id(room_pressure).state);
         - mqtt.publish:
             topic: "Livingroom/Thermostat/${device_name}/Pressure"
             payload: !lambda |-
@@ -884,7 +1037,8 @@ sensor:
       <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_humidity" } } # inline syntax
       on_value:
         - lambda: |-
-                ESP_LOGI("bme680_bsec", "The Humidity value is pressure=%.4f", id(room_humidity).state);
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("bme680_bsec_humidity", "The Humidity value is pressure=%.4f", id(room_humidity).state);
         - mqtt.publish_json:
             topic: ${topic_message}
             payload: !lambda |-
@@ -902,7 +1056,8 @@ sensor:
       <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_gas_resistance" } } # inline syntax
       on_value:
         - lambda: |-
-                ESP_LOGI("bme680_bsec", "The Gas Resistance value is gas=%.1f", id(room_gas_resistance).state);
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("bme680_bsec_gas_resistance", "The Gas Resistance value is gas=%.1f", id(room_gas_resistance).state);
         - mqtt.publish:
             topic: "Livingroom/Thermostat/${device_name}/Gas"
             payload: !lambda |-
@@ -919,7 +1074,8 @@ sensor:
       <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "sensor", component_id: "bme680_iaq" } } # inline syntax
       on_value:
         - lambda: |-
-                ESP_LOGI("bme680_bsec", "The IAQ value is iaq=%.2f", id(iaq).state);
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("bme680_bsec_iaq", "The IAQ value is iaq=%.2f", id(iaq).state);
         - mqtt.publish:
             topic: "Livingroom/Thermostat/${device_name}/IAQ"
             payload: !lambda |-
@@ -975,6 +1131,7 @@ sensor:
     on_value:
       then:
         - lambda: |-
+            ESP_LOGI("separator", "------------------------------------------------------");
             ESP_LOGI("OpenWeatherMap", "The Outtemp value is temperature=%f", id(owm_weather_temperature).state);
 
   # OpenWeatherMap sensor.openweathermap_humidity
@@ -996,6 +1153,7 @@ sensor:
     on_value:
       then:
         - lambda: |-
+            ESP_LOGI("separator", "------------------------------------------------------");
             ESP_LOGI("OpenWeatherMap", "The Wind speed value is windspeed=%f", id(owm_weather_windspeed).state);
   # OpenWeatherMap sensor.openweathermap_rain
   - platform: homeassistant
@@ -1006,7 +1164,19 @@ sensor:
     on_value:
       then:
         - lambda: |-
+            ESP_LOGI("separator", "------------------------------------------------------");
             ESP_LOGI("OpenWeatherMap", "The Rain value is rain=%f", id(owm_weather_rain).state);
+  # OpenWeatherMap sensor.openweathermap_weather_code
+  - platform: homeassistant
+    name: "OpenWeatherMap Weather"
+    entity_id: sensor.openweathermap_weather_code
+    id: owm_weather_code
+    internal: true
+    #on_value:
+    #  then:
+    #    - logger.log:
+    #            format: "The OpenWeatherMap weather_code is %f"
+    #            args: [ 'id(owm_weather_code).state' ]
 
   ######################################
   # WIFI Signal
@@ -1031,10 +1201,11 @@ sensor:
       then:
         - lambda: !lambda |-
             float val = id(s_climate_temperature).state;
-            ESP_LOGI("single_point", "CLIMATE settemp(val) is %f", val );
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("CLIMATE_TEMP", "CLIMATE settemp(val) is %f", val );
             id(settemp_value) = id(s_climate_temperature).state;
             id(${display_id}).set_component_text_printf("page0.settemp", "%.1f", id(settemp_value));
-            ESP_LOGI("single_point", "CLIMATE settemp is %f", id(s_climate_temperature).state);
+            ESP_LOGI("CLIMATE_TEMP", "CLIMATE settemp is %f", id(s_climate_temperature).state);
 
 ######################################
 # TEXT SENSOR SECTION
@@ -1106,7 +1277,8 @@ text_sensor:
       then:
         - lambda: !lambda |-
             std::string val = id(ts_CLIMATE_ACTION).state;
-            ESP_LOGI("single_point", "Climate HVAC Action is %s", val.c_str() ); //id(ts_CLIMATE_ACTION).state.c_str()
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("CLIMATE_ACTION", "Climate HVAC Action is %s", val.c_str() ); //id(ts_CLIMATE_ACTION).state.c_str()
             //std::string val = id(ts_CLIMATE_ACTION).state;
             //ESP_LOGI("single_point", "Value of Climate HVAC Action: %s", val.c_str());
         - script.execute: 
@@ -1125,7 +1297,8 @@ text_sensor:
       then:
         - lambda: !lambda |-
             std::string val = id(ts_CLIMATE_MODE).state;
-            ESP_LOGI("single_point", "CLIMATE HVAC Mode is %s", val.c_str() ); //id(ts_CLIMATE_MODE).state.c_str()
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("CLIMATE_MODE", "CLIMATE HVAC Mode is %s", val.c_str() ); //id(ts_CLIMATE_MODE).state.c_str()
             //std::string val = id(ts_CLIMATE_MODE).state;
             //ESP_LOGI("main", "Value of Climate HVAC Mode: %s", val.c_str());
         - script.execute: 
@@ -1145,7 +1318,8 @@ text_sensor:
         - lambda: !lambda |-
             std::string val = id(ts_CLIMATE_PRESET).state;
             id(CLIMATE_PRESET_MODE) = id(ts_CLIMATE_PRESET).state.c_str();
-            ESP_LOGD("single_point", "CLIMATE PRESET-val is from text_sensor3:   %s", val.c_str()); //id(ts_CLIMATE_PRESET).state.c_str()
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("CLIMATE_PRESET", "CLIMATE PRESET-val is from text_sensor3:   %s", val.c_str()); //id(ts_CLIMATE_PRESET).state.c_str()
         - script.execute: 
               id: CLIMATE_ATTRIBUTES_GET
 
@@ -1157,24 +1331,44 @@ text_sensor:
     entity_id: weather.forecast_otthon
     id: owm_weather_forecast
     internal: true
-  # OpenWeatherMap sensor.openweathermap_weather_code
+  # OpenWeatherMap ssensor.openweathermap_condition
   - platform: homeassistant
-    name: "OpenWeatherMap Weather"
-    entity_id: sensor.openweathermap_weather_code
-    id: owm_weather_code
+    name: "OpenWeatherMap Condition"
+    entity_id: sensor.openweathermap_condition
+    id: owm_weather_condition
     internal: true
-    #on_value:
-    #  then:
-    #    - logger.log:
-    #            format: "The OpenWeatherMap weather_code is %f"
-    #            args: [ 'id(owm_weather_code).state' ]
+    on_value:
+      then:
+        - lambda: |-
+            // [I][OpenWeatherMap:1226]: owm_weather_condition is clear-night
+            // [I][OpenWeatherMap:1228]: owm_weather_conditon_today is L#\xfb?
+            // [I][OpenWeatherMap:1229]: owm_weather_condition value is condition=clear-night
+            std::string val = id(owm_weather_condition).state;
+            ESP_LOGI("separator", "------------------------------------------------------");
+            ESP_LOGI("OpenWeatherMap", "owm_weather_condition is %s", val.c_str() ); 
+            id(owm_weather_conditon_today) = id(owm_weather_condition).state.c_str();
+            ESP_LOGI("OpenWeatherMap", "owm_weather_conditon_today is %s", id(owm_weather_conditon_today));
+            ESP_LOGI("OpenWeatherMap", "owm_weather_condition value is condition=%s", id(owm_weather_condition).state.c_str());
+        #- globals.set:
+        #    id: owm_weather_conditon_today
+        #    value: id(owm_weather_condition).c_str()
 
+  
+######################################
+# ERROR BLINKING LED SECTION
+######################################
+light:
+  - platform: monochromatic
+    name: "Window/Door open Blinking LED"
+    output: blue_led
 
-######################################
-# SWITCH SECTION
-######################################
-status_led:
-  pin: GPIO2
+output:
+  - platform: esp8266_pwm
+    id: blue_led
+    pin: 
+      number: $blue_led_pin
+      inverted: true
+    #<<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "output", component_id: "blue_led" } } # inline syntax
   
 ######################################
 # SWITCH SECTION
@@ -1208,9 +1402,10 @@ switch:
     id: OnOff_template_switch
     <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "switch", component_id: "unit_onoff" } } # inline syntax
     turn_on_action:
-      - logger.log: "The Unit is turned ON"
       - lambda: |-
-          id(unit_state) = true;
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("OnOff_template_switch","The Unit is turned ON");
+          id(state_unit_on) = true;
 
           id(${display_id}).send_command_printf("page0.on_off.pic=%d", id(on_off_on_pic));
           id(${display_id}).send_command_printf("page0.on_off.pic2=%d", id(on_off_on_pic));
@@ -1218,9 +1413,10 @@ switch:
           id(${display_id}).send_command_printf("tsw hvac,1");
           id(${display_id}).send_command_printf("tsw heater,1");
     turn_off_action:
-      - logger.log: "The Unit is turned OFF"
       - lambda: |-
-          id(unit_state) = false;
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("OnOff_template_switch","The Unit is turned OFF");
+          id(state_unit_on) = false;
 
           id(heater_template_switch).turn_off();
           id(${display_id}).send_command_printf("tsw hvac,0");
@@ -1242,15 +1438,16 @@ switch:
     <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "switch", component_id: "heater_onoff" } } # inline syntax
     turn_on_action:
       #- switch.turn_off: ac_template_switch
-      - switch.turn_on: internal_led
-      - logger.log: "The Heater is turned ON"
-
+      #- switch.turn_on: internal_led
+      - output.turn_on: blue_led
       - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("heater_template_switch","The Heater is turned ON");
           //id(ac_template_switch).turn_off();
-          id(heater_state) = true;
+          id(state_heater) = true;
           id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_on_pic));
           id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_on_pic));
-          id(internal_led).turn_on();
+          //id(internal_led).turn_on();
           id(${display_id}).send_command_printf("tsw hvac,0");
  
       - mqtt.publish_json:
@@ -1264,12 +1461,13 @@ switch:
             root["trigger"] = "switch on_turn_on";
             root["timestamp"] = id(homeassistant_time).now().timestamp;
     turn_off_action:
-      - switch.turn_off: internal_led
+      #- switch.turn_off: internal_led
+      - output.turn_off: blue_led
       #- switch.turn_off: ac_template_switch
-      - logger.log: "The Heater is turned OFF"
-
       - lambda: |-
-          id(heater_state) = false;
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("heater_template_switch","The Heater is turned OFF");
+          id(state_heater) = false;
           id(${display_id}).send_command_printf("page0.heater.pic=%d", id(heater_off_pic));
           id(${display_id}).send_command_printf("page0.heater.pic2=%d", id(heater_off_pic));
           id(${display_id}).send_command_printf("tsw hvac,1");
@@ -1296,21 +1494,22 @@ switch:
     <<: !include { file: includes/mqtt/.mqtt.components-topic.yaml, vars: { component_type: "switch", component_id: "ac_onoff" } } # inline syntax
     turn_on_action:
       - switch.turn_on: internal_led
-      #- switch.turn_off: heater_template_switch
-      - logger.log: "The AC is turned ON"
+      - output.turn_on: blue_led
       - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("ac_template_switch","The AC is turned ON");
           //id(heater_template_switch).turn_off();
-          id(ac_state) = true;
+          id(state_ac) = true;
           id(${display_id}).send_command_printf("page0.hvac.pic=%d", id(ac_on_pic));
           id(${display_id}).send_command_printf("page0.hvac.pic2=%d", id(ac_on_pic));
-          id(internal_led).turn_on();
+          //id(internal_led).turn_on();
           
           id(${display_id}).send_command_printf("tsw heater,0");
     turn_off_action:
-      #- switch.turn_on: internal_led
-      - logger.log: "The AC is turned OFF"
       - lambda: |-
-          id(ac_state) = false;
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("ac_template_switch","The AC is turned OFF");
+          id(state_ac) = false;
           id(${display_id}).send_command_printf("page0.hvac.pic=%d", id(ac_off_pic));
           id(${display_id}).send_command_printf("page0.hvac.pic2=%d", id(ac_off_pic));
           id(${display_id}).send_command_printf("tsw heater,1");
@@ -1360,13 +1559,17 @@ climate:
     #  - switch.turn_off: ac_template_switch
     
     on_control:
-      - logger.log: "Control input received; configuration updated!"
+      - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("climate", "Control input received; configuration updated!");
     on_state:
-      - logger.log: "State updated!"
+      - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("climate", "State updated!");
     target_temperature_change_action:
-      - logger.log: "target_temperature_change_action invoked!"
       - lambda: !lambda |-
-          ESP_LOGI("climate_on_state", "target_temperature_change_action      " );
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("climate_on_state", "target_temperature_change_action invoked!" );
     
     # PRESETS
     default_preset: HOME
@@ -1452,6 +1655,7 @@ time:
               id: CLIMATE_PRESET_SET
               preset_value: "HOME"
           - lambda: !lambda |-
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("time", "days_of_week: MON-FRI preset_value: HOME");
       # heating off: 13:30
       - seconds: 0
@@ -1463,6 +1667,7 @@ time:
               id: CLIMATE_PRESET_SET
               preset_value: "AWAY"
           - lambda: !lambda |-
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("time", "days_of_week: MON-FRI preset_value: AWAY");
       # heating on: 18:00
       - seconds: 0
@@ -1474,6 +1679,7 @@ time:
               id: CLIMATE_PRESET_SET
               preset_value: "HOME"
           - lambda: !lambda |-
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("time", "days_of_week: MON-FRI preset_value: HOME");
       # heating off: 20:30
       - seconds: 0
@@ -1485,6 +1691,7 @@ time:
               id: CLIMATE_PRESET_SET
               preset_value: "SLEEP"
           - lambda: !lambda |-
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("time", "days_of_week: MON-FRI preset_value: SLEEP");
       ######################################
       # WEEKENDS
@@ -1499,6 +1706,7 @@ time:
               id: CLIMATE_PRESET_SET
               preset_value: "HOME"
           - lambda: !lambda |-
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("time", "days_of_week: SAT-SUN preset_value: HOME");
       # heating off: 12:45
       - seconds: 0
@@ -1510,6 +1718,7 @@ time:
               id: CLIMATE_PRESET_SET
               preset_value: "AWAY"
           - lambda: !lambda |-
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("time", "days_of_week: SAT-SUN preset_value: AWAY");
       # heating on: 7:45
       - seconds: 0
@@ -1521,6 +1730,7 @@ time:
               id: CLIMATE_PRESET_SET
               preset_value: "HOME"
           - lambda: !lambda |-
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("time", "days_of_week: SAT-SUN preset_value: HOME");
       # heating off: 20:30
       - seconds: 0
@@ -1532,5 +1742,5 @@ time:
               id: CLIMATE_PRESET_SET
               preset_value: "SLEEP"
           - lambda: !lambda |-
+              ESP_LOGI("separator", "------------------------------------------------------");
               ESP_LOGI("time", "days_of_week: MON-FRI preset_value: SLEEP");
-

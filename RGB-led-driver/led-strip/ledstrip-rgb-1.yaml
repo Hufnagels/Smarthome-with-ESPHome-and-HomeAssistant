@@ -1,9 +1,25 @@
-# wemos D1 mini board
-# ESP8266 chip
-# 3 x IRFZ44N Mosfet
-# R: D2
-# G: D3
-# B: D4
+# @file         ledstrip-rgb-1.yaml
+# @author   
+# @description  leddriver for RGB Led strip with 5050 smd leds
+# @version      0.1.1.
+# @section      Board 
+#   - Wemos D1 mini board
+# @section      BOM
+#   - Logic-level Mosfet
+#     Darlington, transistor array, 0.6A, 50V, 7 channel, DIP16
+#     https://www.hqelektronika.hu/reed-swus200v-is05a-ps10w-10mm-uvegcso-hossz-reed-sw-05-10-mf15
+#   - 12V to 5V DC Buck converter
+#     3A adjustable step-down DC-DC switching power supply module, 1.8V/2.5V/3.3V/5V/9V/12V
+#     https://www.hestore.hu/prod_10038725.html
+#     Switching step-down converter, 4.5-28V/0.8-20V, 3A
+#     https://www.hestore.hu/prod_10038118.html
+#   - 20 PIN SEPARATED 0.46/0.6mm
+#     https://www.hqelektronika.hu/hu/20-pin-separated-046-06mm-ic-p-20p
+# @include  
+# @library
+# @description
+#   5050 smd rgb led strip driver
+# @TODO
 
 ######################################
 # SUBSTITUIONS SECTION
@@ -12,7 +28,7 @@ substitutions:
   device_type: LED-strip
   device_subtype: RGB
   device_number: "1"
-  device_name: led-strip-rgb-${device_number}
+  device_name: ledstrip-rgb-${device_number}
   device_group: Lighting
   
   device_location: Kidroom
@@ -48,7 +64,7 @@ esphome:
   # Board type
   <<: !include includes/boards/.board.wemos-d1-mini.yaml
   project:
-    <<: !include includes/projects/rgb-ledstrip.yaml
+    <<: !include includes/projects/ledstrip-rgb/.versioning.ledstrip-rgb.yaml
   on_boot:
     priority: 200
     then:
@@ -71,6 +87,9 @@ packages:
 ######################################
 <<: !include includes/base/.base.connection-settings.yaml
 
+logger:
+  level: INFO
+  
 ######################################
 # HA DATE-TYME SYNC SECTION
 ######################################
@@ -79,6 +98,29 @@ packages:
 ######################################
 # MQTT SECTION
 ######################################
+mqtt:
+  on_connect:
+    - lambda: |-
+        ESP_LOGI("separator", "------------------------------------------------------");
+        ESP_LOGI("mqtt", "${device_type} ${device_subtype} ${device_number} connected to MQTT");
+  on_disconnect:
+    - lambda: |-
+        ESP_LOGI("separator", "------------------------------------------------------");
+        ESP_LOGI("mqtt", "${device_type} ${device_subtype} ${device_number} disconnected from MQTT");
+  on_json_message:
+    # Central Unit send command for turning ON | OFF Heater
+    - topic: ${topic_command}
+      then:
+        - lambda: |-
+            if (x.containsKey("receiver") && x["receiver"] == "${device_name}") {
+              if (x["payload"]["command"] == "RESTART" ) {
+                ESP_LOGI("separator", "------------------------------------------------------");
+                ESP_LOGI("MQTT","RESTART command received");
+                id(restart_switch).turn_on();
+                //id(CLIMATE_MODE_SET)->execute("OFF");
+              }
+              
+            }
 
 ######################################
 # LIGHT SECTION
@@ -92,7 +134,9 @@ light:
     green: output_component_G
     blue: output_component_B
     on_turn_on:
-      - logger.log: "Light Turned On!"
+      - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("light_component", "Light Turned On!");
       - mqtt.publish_json:
             topic: ${topic_basetopic}/state
             payload: |-
@@ -108,7 +152,9 @@ light:
               root["trigger"] = "light on_turn_on";
               root["timestamp"] = id(homeassistant_time).now().timestamp;
     on_turn_off:
-      - logger.log: "Light Turned Off!"
+      - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("light_component", "Light Turned Off!");
       - mqtt.publish_json:
             topic: ${topic_basetopic}/state
             payload: |-
@@ -120,7 +166,9 @@ light:
               root["trigger"] = "light on_sturn_off";
               root["timestamp"] = id(homeassistant_time).now().timestamp;
     on_state:
-      - logger.log: "Light State Changed!"
+      - lambda: |-
+          ESP_LOGI("separator", "------------------------------------------------------");
+          ESP_LOGI("light_component", "Light State Changed!");
       - mqtt.publish_json:
             topic: ${topic_basetopic}/state
             payload: |-
@@ -135,7 +183,7 @@ light:
               root["payload"]["blue"] = id(${light_component_id})->remote_values.get_blue() * 255;
               root["trigger"] = "light on_state";
               root["timestamp"] = id(homeassistant_time).now().timestamp;
-    <<: !include includes/projects/rgb-ledstrip-effects.yaml
+    <<: !include includes/projects/ledstrip-rgb/ledstrip-rgb-effects.yaml
     
 ######################################
 # OUTPUT SECTION
@@ -158,6 +206,9 @@ output:
 # SWITCH SECTION
 ######################################
 switch:
+  - platform: restart
+    name: "Restart"
+    id: restart_switch
   # Internal Led for feedback 
   - platform: gpio
     pin:
