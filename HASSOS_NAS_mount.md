@@ -1,6 +1,6 @@
 ## HASSOS mount NAS network share
 
-I use home assistant OS in a Proxmox VM.
+I use HASSOS in a Proxmox VM.
 To make it possible to use network share inside and permanently the following needs to be done:
 
 ### Prerequisit
@@ -8,7 +8,7 @@ To make it possible to use network share inside and permanently the following ne
 - a generic ubuntu server image.
 
 ### Step1
-The home assistant VM is shut down before starting.
+The HASSOS VM is shut down before starting.
 Note the ID of the HA and Ubuntu VMs in proxmox. Forex.:
 - HA vm id: 100
 - Ubuntu vm id: 204
@@ -128,11 +128,11 @@ Once complete, remove the temporary files and shutdown the Ubuntu VM.
 ```sh
 sudo shutdown -h now
 ```
-Start HAOS Container and check if everything works:
+Start HASSOS Container and check if everything works:
 ```
 dmesg | grep cifs
 ```
 ```
 dmesg | grep nfs
 ```
-If YES, then edit the Proxmox config file in **Step1** above to comment out the HA disk (not strictly necessary, but will prevent issues if you accidentally boot the VM whilst HA is running). Boot the HA VM, and you should be good.
+If YES, then edit the Proxmox config file in **Step1** above to comment out the HA disk. Boot the HASSOS Container.
